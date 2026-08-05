@@ -1,0 +1,3 @@
+-- This file is intentionally empty.
+-- All database initialization is handled by 01_users.sh
+-- (shell scripts in docker-entrypoint-initdb.d run before .sql files of the same prefix).

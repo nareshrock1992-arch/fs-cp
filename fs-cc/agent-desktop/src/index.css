@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Theme tokens ─────────────────────────────────────────────────────────── */
+/* Light mode is the default (:root).  Dark mode overrides via .dark on <html>. */
+
+:root {
+  /* Surfaces */
+  --panel-bg:      248 250 255;   /* #F8FAFF */
+  --panel-surface: 255 255 255;   /* #FFFFFF */
+  --panel-raised:  238 242 255;   /* #EEF2FF */
+  --panel-border:  209 217 238;   /* #D1D9EE */
+  --panel-accent:   59 130 246;   /* #3B82F6 */
+
+  /* Text */
+  --ink:       15  23  42;        /* #0F172A */
+  --ink-dim:   71  85 105;        /* #475569 */
+  --ink-faint: 148 163 184;       /* #94A3B8 */
+}
+
+.dark {
+  /* Surfaces */
+  --panel-bg:       6  11  23;    /* #060B17 */
+  --panel-surface: 11  18  32;    /* #0B1220 */
+  --panel-raised:  17  27  46;    /* #111B2E */
+  --panel-border:  28  42  66;    /* #1C2A42 */
+  --panel-accent:  30  58 110;    /* #1E3A6E */
+
+  /* Text */
+  --ink:       232 236 246;       /* #E8ECF6 */
+  --ink-dim:   139 153 184;       /* #8B99B8 */
+  --ink-faint:  76  90 120;       /* #4C5A78 */
+}
+
+/* ─── Base ─────────────────────────────────────────────────────────────────── */
+@layer base {
+  html, body, #root {
+    @apply h-full bg-panel-bg text-ink font-sans antialiased;
+  }
+
+  /* Light scrollbar */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(var(--panel-border)) rgb(var(--panel-bg));
+  }
+  *::-webkit-scrollbar       { width: 6px; height: 6px; }
+  *::-webkit-scrollbar-track { background: rgb(var(--panel-bg)); }
+  *::-webkit-scrollbar-thumb { background: rgb(var(--panel-border)); border-radius: 3px; }
+}
+
+/* ─── Components ───────────────────────────────────────────────────────────── */
+@layer components {
+  .card {
+    @apply bg-panel-surface border border-panel-border rounded-xl;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.05);
+  }
+
+  .dark .card {
+    box-shadow: 0 1px 3px rgba(0,0,0,0.50), 0 1px 2px rgba(0,0,0,0.60);
+  }
+
+  .btn {
+    @apply inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold
+           transition-all duration-150 focus:outline-none;
+  }
+
+  .btn-primary {
+    @apply btn bg-brand hover:bg-brand-dim text-white;
+  }
+
+  .stat-label {
+    @apply text-[10px] font-semibold uppercase tracking-widest text-ink-faint;
+  }
+
+  .stat-value {
+    @apply text-xl font-bold tabular-nums;
+  }
+
+  /* Generic form input — used across Login and future modals */
+  .field-input {
+    @apply w-full bg-panel-raised border border-panel-border rounded-lg px-3 py-2.5
+           text-sm text-ink placeholder-ink-faint
+           focus:outline-none focus:border-brand transition-colors;
+  }
+}

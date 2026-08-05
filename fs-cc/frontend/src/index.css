@@ -1,0 +1,48 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html {
+  font-family: 'Inter', sans-serif;
+}
+
+body {
+  background-color: #0b0e14;
+  background-image:
+    radial-gradient(circle at 0% 0%, rgba(242, 169, 59, 0.035), transparent 35%),
+    radial-gradient(circle at 100% 0%, rgba(91, 141, 239, 0.035), transparent 35%);
+  min-height: 100vh;
+}
+
+::selection {
+  background: rgba(242, 169, 59, 0.25);
+}
+
+/* Tabular numerals everywhere a number needs to line up in a column */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Thin scrollbars to match the console aesthetic */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #232938;
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2e3648;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 2s ease-in-out infinite;
+}

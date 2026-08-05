@@ -1,0 +1,3 @@
+-- This file is intentionally empty.
+-- Permission grants are handled by 01_users.sh which has access to
+-- CC_DB_USER, ENRS_DB_USER env vars from the docker-compose.yml postgres service.

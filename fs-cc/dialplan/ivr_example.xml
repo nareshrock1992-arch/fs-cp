@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  FreeSWITCH IVR dialplan example for the Contact Center UI.
+
+  Deploy to: /etc/freeswitch/dialplan/default/ivr_contact_center.xml
+  Reload with: fs_cli -x "reloadxml"
+
+  How IVR tracking works with this dialplan:
+  1. <action application="set" data="ivr_step=LABEL"/> tags the current IVR position.
+  2. The Node.js ESL service receives CHANNEL_EXECUTE events and reads the
+     variable_ivr_step header to record each step in calls.ivr_path (JSONB).
+  3. DTMF events are captured separately and stored as pressed_N steps.
+  4. All steps are flushed into the DB row when the caller enters a queue
+     via the callcenter application.
+-->
+
+<!-- ============================================================
+     Entry point: inbound DID routes to the main IVR
+     Adjust the destination_number regex to match your DID(s)
+     ============================================================ -->
+<extension name="cc_ivr_entry">
+  <condition field="destination_number" expression="^(0800\d+|1800\d+|\d{4})$">
+
+    <!-- Tag entry point so ESL records it -->
+    <action application="set"     data="ivr_step=main_menu"/>
+    <action application="export"  data="ivr_step=main_menu"/>
+
+    <action application="answer"/>
+    <action application="sleep"   data="500"/>
+
+    <!-- Welcome prompt -->
+    <action application="set"      data="ivr_step=play:welcome"/>
+    <action application="playback" data="ivr/welcome.wav"/>
+
+    <!-- Main menu -->
+    <action application="set"              data="ivr_step=main_dtmf_gather"/>
+    <action application="play_and_get_digits" data="1 1 3 5000 # ivr/main_menu.wav ivr/invalid_entry.wav ivr_digit \d"/>
+
+    <!-- Route by digit — export so downstream legs can read it -->
+    <action application="set"    data="ivr_step=routing_${ivr_digit}"/>
+    <action application="export" data="ivr_step=routing_${ivr_digit}"/>
+
+    <action application="execute_extension" data="cc_ivr_route_${ivr_digit} XML default"/>
+  </condition>
+</extension>
+
+<!-- ============================================================
+     Option 1 → Support queue
+     ============================================================ -->
+<extension name="cc_ivr_route_1">
+  <condition field="destination_number" expression="^cc_ivr_route_1$">
+    <action application="set"         data="ivr_step=support_queue"/>
+    <action application="export"      data="ivr_step=support_queue"/>
+    <action application="set"         data="ivr_option=1"/>
+    <action application="playback"    data="ivr/connecting_support.wav"/>
+    <action application="callcenter"  data="support@default"/>
+  </condition>
+</extension>
+
+<!-- ============================================================
+     Option 2 → Sales queue
+     ============================================================ -->
+<extension name="cc_ivr_route_2">
+  <condition field="destination_number" expression="^cc_ivr_route_2$">
+    <action application="set"         data="ivr_step=sales_queue"/>
+    <action application="export"      data="ivr_step=sales_queue"/>
+    <action application="set"         data="ivr_option=2"/>
+    <action application="playback"    data="ivr/connecting_sales.wav"/>
+    <action application="callcenter"  data="sales@default"/>
+  </condition>
+</extension>
+
+<!-- ============================================================
+     Option 3 → Billing / Accounts queue
+     ============================================================ -->
+<extension name="cc_ivr_route_3">
+  <condition field="destination_number" expression="^cc_ivr_route_3$">
+    <action application="set"         data="ivr_step=billing_queue"/>
+    <action application="export"      data="ivr_step=billing_queue"/>
+    <action application="set"         data="ivr_option=3"/>
+    <action application="playback"    data="ivr/connecting_billing.wav"/>
+    <action application="callcenter"  data="support@default"/>
+  </condition>
+</extension>
+
+<!-- ============================================================
+     Option 0 → Operator / catch-all
+     ============================================================ -->
+<extension name="cc_ivr_route_0">
+  <condition field="destination_number" expression="^cc_ivr_route_0$">
+    <action application="set"         data="ivr_step=operator_queue"/>
+    <action application="export"      data="ivr_step=operator_queue"/>
+    <action application="set"         data="ivr_option=0"/>
+    <action application="callcenter"  data="support@default"/>
+  </condition>
+</extension>
+
+<!-- ============================================================
+     Invalid / no-input fallback
+     ============================================================ -->
+<extension name="cc_ivr_route_">
+  <condition field="destination_number" expression="^cc_ivr_route_$">
+    <action application="set"         data="ivr_step=invalid_input"/>
+    <action application="playback"    data="ivr/invalid_entry.wav"/>
+    <!-- Re-enter the IVR -->
+    <action application="execute_extension" data="cc_ivr_entry XML default"/>
+  </condition>
+</extension>

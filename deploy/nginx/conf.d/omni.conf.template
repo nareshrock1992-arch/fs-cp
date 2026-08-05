@@ -1,0 +1,194 @@
+# omni.conf.template — Omni Platform nginx server blocks
+#
+# Processed by envsubst at container start (nginx:alpine entrypoint).
+# Variables substituted from docker-compose.yml nginx environment:
+#   ${SERVER_NAME} — IP or FQDN (the ONLY value to change when moving to a domain)
+#   ${SSL_CERT}    — absolute path to TLS certificate inside the container
+#   ${SSL_KEY}     — absolute path to TLS private key inside the container
+#
+# Routing map:
+#   /              → Omni Dashboard (static HTML served by this container)
+#   /cc/           → cc-frontend:80
+#   /agent/        → agent-desktop:80
+#   /enrs/         → enrs-frontend:80
+#   /cc/api/       → cc-backend:4000   (strips /cc prefix)
+#   /enrs/api/     → enrs-backend:4100 (strips /enrs prefix)
+#   /enrs/api/v1/internal/  → BLOCKED (Lua-only, never exposed externally)
+#   /cc/socket.io  → cc-backend:4000   (WebSocket upgrade)
+#   /enrs/socket.io→ enrs-backend:4100 (WebSocket upgrade)
+
+# ── Upstreams ─────────────────────────────────────────────────────────────────
+upstream cc_backend {
+    server cc-backend:4000;
+    keepalive 16;
+}
+
+upstream enrs_backend {
+    server enrs-backend:4100;
+    keepalive 16;
+}
+
+upstream cc_frontend {
+    server cc-frontend:80;
+    keepalive 8;
+}
+
+upstream agent_desktop {
+    server agent-desktop:80;
+    keepalive 8;
+}
+
+upstream enrs_frontend {
+    server enrs-frontend:80;
+    keepalive 8;
+}
+
+# ── HTTP (port 80) ─────────────────────────────────────────────────────────────
+# Redirect all traffic to HTTPS, except:
+#   /_health       — Docker HEALTHCHECK (no TLS, no redirect)
+#   /.well-known/  — Let's Encrypt ACME challenge (no redirect)
+server {
+    listen 80;
+    server_name ${SERVER_NAME};
+
+    # Docker compose healthcheck endpoint — must be HTTP, not HTTPS
+    location = /_health {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+    }
+
+    # Let's Encrypt ACME challenge (no-op for self-signed setups)
+    location /.well-known/acme-challenge/ {
+        root /usr/share/nginx/html;
+    }
+
+    # Redirect everything else to HTTPS
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+# ── HTTPS (port 443) ───────────────────────────────────────────────────────────
+server {
+    listen 443 ssl;
+    http2  on;
+    server_name ${SERVER_NAME};
+
+    # ── TLS ────────────────────────────────────────────────────────────────────
+    # ${SSL_CERT} and ${SSL_KEY} are substituted from docker-compose env vars.
+    ssl_certificate     ${SSL_CERT};
+    ssl_certificate_key ${SSL_KEY};
+
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256;
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache   shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_session_tickets off;
+
+    # HSTS — 6 months. Remove includeSubDomains if you have HTTP-only sub-domains.
+    add_header Strict-Transport-Security "max-age=15768000; includeSubDomains" always;
+
+    # ── Security headers ────────────────────────────────────────────────────────
+    include /etc/nginx/snippets/security.conf;
+
+    # ── Root: Omni Dashboard ────────────────────────────────────────────────────
+    location = / {
+        root /usr/share/nginx/html;
+        try_files /index.html =404;
+        add_header Cache-Control "no-store";
+    }
+
+    location = /index.html {
+        root /usr/share/nginx/html;
+        add_header Cache-Control "no-store";
+    }
+
+    # ── CC Frontend — /cc/ ──────────────────────────────────────────────────────
+    # Trailing slash in proxy_pass strips the /cc/ prefix before forwarding.
+    # cc-frontend's own nginx.prod.conf handles try_files → index.html for SPA.
+    location /cc/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass http://cc_frontend/;
+    }
+
+    # ── Agent Desktop — /agent/ ─────────────────────────────────────────────────
+    location /agent/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass http://agent_desktop/;
+    }
+
+    # ── ENRS Frontend — /enrs/ ──────────────────────────────────────────────────
+    location /enrs/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass http://enrs_frontend/;
+    }
+
+    # ── CC API — /cc/api/ ───────────────────────────────────────────────────────
+    # Strips /cc prefix: browser sends /cc/api/agents → backend receives /api/agents
+    location /cc/api/auth/ {
+        include /etc/nginx/snippets/proxy.conf;
+        limit_req zone=auth burst=10 nodelay;
+        proxy_pass http://cc_backend/api/auth/;
+    }
+
+    location /cc/api/ {
+        include /etc/nginx/snippets/proxy.conf;
+        limit_req zone=api burst=60 nodelay;
+        proxy_pass http://cc_backend/api/;
+    }
+
+    # ── ENRS API — /enrs/api/ ───────────────────────────────────────────────────
+    # The internal Lua contract API (/api/v1/internal/*) must never be reached
+    # from the internet — block it explicitly here before the general /enrs/api/ block.
+    location /enrs/api/v1/internal/ {
+        deny all;
+        return 403;
+    }
+
+    location /enrs/api/auth/ {
+        include /etc/nginx/snippets/proxy.conf;
+        limit_req zone=auth burst=10 nodelay;
+        proxy_pass http://enrs_backend/api/auth/;
+    }
+
+    location /enrs/api/ {
+        include /etc/nginx/snippets/proxy.conf;
+        limit_req zone=api burst=60 nodelay;
+        proxy_pass http://enrs_backend/api/;
+    }
+
+    # ── ENRS health probes (used by monitoring / Docker) ────────────────────────
+    location /enrs/health/ {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_pass http://enrs_backend/health/;
+    }
+
+    # ── CC Socket.IO — WebSocket upgrade ────────────────────────────────────────
+    # SOCKET_PATH on cc-backend = /cc/socket.io (set via SOCKET_PATH env var)
+    # VITE_SOCKET_PATH for cc-frontend and agent-desktop = /cc/socket.io
+    location /cc/socket.io {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_buffering    off;
+        proxy_read_timeout 3600s;
+        proxy_pass http://cc_backend/cc/socket.io;
+    }
+
+    # ── ENRS Socket.IO — WebSocket upgrade ──────────────────────────────────────
+    location /enrs/socket.io {
+        include /etc/nginx/snippets/proxy.conf;
+        proxy_buffering    off;
+        proxy_read_timeout 3600s;
+        proxy_pass http://enrs_backend/enrs/socket.io;
+    }
+
+    # ── Error pages ─────────────────────────────────────────────────────────────
+    error_page 404 /error_pages/404.html;
+    error_page 500 502 503 504 /error_pages/50x.html;
+
+    location /error_pages/ {
+        root /usr/share/nginx/html;
+        internal;
+    }
+}

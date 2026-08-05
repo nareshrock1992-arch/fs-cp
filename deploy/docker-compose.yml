@@ -1,0 +1,454 @@
+###############################################################################
+# OMNI PLATFORM — Production Docker Compose
+###############################################################################
+#
+# Configuration source: deploy/.env (the ONLY file you edit per customer)
+# FreeSWITCH runs on the HOST — not in Docker
+# Initial access: https://SERVER_IP (self-signed TLS)
+# Domain migration: change SERVER_NAME in .env — no other changes needed
+#
+# Commands:
+#   docker compose build              # build all images
+#   docker compose up -d              # start all services
+#   docker compose ps                 # status + health
+#   docker compose logs -f <service>  # tail logs for one service
+#
+# First deploy — CC migrations are NOT idempotent, run once:
+#   docker compose exec cc-backend node db/init.js
+#
+# ENRS migrations run automatically on every container start (idempotent).
+###############################################################################
+
+name: omni
+
+###############################################################################
+# NETWORKS
+###############################################################################
+# Single bridge network. Only nginx exposes public ports (80, 443).
+# internal: false — nginx needs outbound access for Let's Encrypt ACME challenges.
+
+networks:
+  omni-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+###############################################################################
+# VOLUMES
+###############################################################################
+
+volumes:
+  postgres-data:
+    driver: local
+  redis-data:
+    driver: local
+
+###############################################################################
+# SERVICES
+###############################################################################
+
+services:
+
+  ##############################################################################
+  # POSTGRESQL
+  ##############################################################################
+  # Two isolated databases (fs_cc, fs_enrs) with separate users.
+  # Initialization scripts in postgres/init/ run ONCE on a fresh volume.
+  # They use CC_DB_* and ENRS_DB_* env vars so no credentials are hardcoded.
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: omni-postgres
+    restart: unless-stopped
+    networks:
+      - omni-net
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      # Superuser — used by the init scripts to create app users and databases
+      POSTGRES_USER: ${POSTGRES_ADMIN_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_ADMIN_PASSWORD}
+      # Application credentials — consumed by 01_init.sh at database creation time
+      CC_DB_NAME: ${CC_DB_NAME}
+      CC_DB_USER: ${CC_DB_USER}
+      CC_DB_PASSWORD: ${CC_DB_PASSWORD}
+      ENRS_DB_NAME: ${ENRS_DB_NAME}
+      ENRS_DB_USER: ${ENRS_DB_USER}
+      ENRS_DB_PASSWORD: ${ENRS_DB_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_ADMIN_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ##############################################################################
+  # REDIS
+  ##############################################################################
+  # DB 0 → fs-cc | DB 1 → fs-enrs
+  # Password injected via CLI override so it is never stored in redis.conf.
+
+  redis:
+    image: redis:7-alpine
+    container_name: omni-redis
+    restart: unless-stopped
+    networks:
+      - omni-net
+    volumes:
+      - redis-data:/data
+      - ./redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: >
+      redis-server /usr/local/etc/redis/redis.conf
+      --requirepass "${REDIS_PASSWORD}"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
+
+  ##############################################################################
+  # CC BACKEND (fs-cc)
+  ##############################################################################
+  # Port bound to loopback: FreeSWITCH Lua scripts on the host reach the API
+  # at 127.0.0.1:4000. External traffic goes via nginx only.
+  # FreeSWITCH dirs mounted at IDENTICAL paths (host == container) so that
+  # FS_CONF_PATH and similar env vars work without remapping.
+
+  cc-backend:
+    image: ${CC_BACKEND_IMAGE}
+    build:
+      context: ../fs-cc/backend
+      dockerfile: Dockerfile
+    container_name: omni-cc-backend
+    restart: unless-stopped
+    networks:
+      - omni-net
+    ports:
+      # Loopback-only so only host-local processes (FreeSWITCH Lua) can reach it
+      - "127.0.0.1:${CC_BACKEND_PORT}:${CC_BACKEND_PORT}"
+    extra_hosts:
+      # Resolves host.docker.internal → Docker host gateway IP (for ESL connection)
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # FreeSWITCH paths — same path inside and outside container (pass-through)
+      - ${FS_CONF_DIR}:${FS_CONF_DIR}:rw
+      - ${FS_SCRIPT_DIR}:${FS_SCRIPT_DIR}:rw
+      - ${FS_SOUND_DIR}:${FS_SOUND_DIR}:ro
+      - ${FS_RECORDING_DIR}:${FS_RECORDING_DIR}:rw
+      - ${FS_STORAGE_DIR}:${FS_STORAGE_DIR}:rw
+      - ${FS_DB_DIR}:${FS_DB_DIR}:ro
+      - ${FS_LOG_DIR}:${FS_LOG_DIR}:rw
+      # Application uploads and logs
+      - ./uploads/cc:/app/uploads:rw
+      - ./logs/cc:/app/logs:rw
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: ${CC_BACKEND_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+
+      # CORS — constructed here so SERVER_NAME interpolation works
+      # (Docker Compose resolves ${SERVER_NAME} from .env; .env itself cannot
+      # self-reference other variables)
+      CORS_ORIGIN: "https://${SERVER_NAME}"
+
+      # Database — CC backend config reads DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT}
+      DB_NAME: ${CC_DB_NAME}
+      DB_USER: ${CC_DB_USER}
+      DB_PASSWORD: ${CC_DB_PASSWORD}
+      DB_POOL_MAX: 10
+
+      # FreeSWITCH ESL — CC backend uses FS_ESL_* prefix
+      FS_ESL_HOST: ${FS_ESL_HOST}
+      FS_ESL_PORT: ${FS_ESL_PORT}
+      FS_ESL_PASSWORD: ${FS_ESL_PASSWORD}
+      FS_ESL_RECONNECT_MS: ${FS_ESL_RECONNECT_MS}
+
+      # FreeSWITCH conf path — CC backend reads FS_CONF_PATH (not FS_CONF_DIR)
+      FS_CONF_PATH: ${FS_CONF_DIR}
+
+      # JWT — CC backend uses a single JWT_SECRET (not dual-token)
+      JWT_SECRET: ${CC_JWT_SECRET}
+      JWT_EXPIRY: ${CC_JWT_EXPIRY}
+
+      # Socket.IO — must match VITE_SOCKET_PATH build arg in cc-frontend and agent-desktop
+      SOCKET_PATH: ${CC_SOCKET_PATH}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${CC_BACKEND_PORT}/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options: { max-size: "100m", max-file: "5" }
+
+  ##############################################################################
+  # ENRS BACKEND
+  ##############################################################################
+  # Auto-runs idempotent migrations on every start (server.js calls migrate.js).
+  # Port bound to loopback for Lua → backend calls (ENRS_API_URL).
+
+  enrs-backend:
+    image: ${ENRS_BACKEND_IMAGE}
+    build:
+      context: ../fs-enrs/backend
+      dockerfile: Dockerfile
+    container_name: omni-enrs-backend
+    restart: unless-stopped
+    networks:
+      - omni-net
+    ports:
+      - "127.0.0.1:${ENRS_BACKEND_PORT}:${ENRS_BACKEND_PORT}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # FreeSWITCH paths — same path inside and outside container (pass-through)
+      - ${FS_CONF_DIR}:${FS_CONF_DIR}:rw
+      - ${FS_DIALPLAN_DIR}:${FS_DIALPLAN_DIR}:rw
+      - ${FS_DIRECTORY_DIR}:${FS_DIRECTORY_DIR}:rw
+      - ${FS_SIP_PROFILE_DIR}:${FS_SIP_PROFILE_DIR}:ro
+      - ${FS_SCRIPT_DIR}:${FS_SCRIPT_DIR}:rw
+      - ${FS_SOUND_DIR}:${FS_SOUND_DIR}:rw
+      - ${FS_RECORDING_DIR}:${FS_RECORDING_DIR}:rw
+      - ${FS_STORAGE_DIR}:${FS_STORAGE_DIR}:rw
+      - ${FS_DB_DIR}:${FS_DB_DIR}:ro
+      - ${FS_LOG_DIR}:${FS_LOG_DIR}:rw
+      # Application uploads and logs
+      - ./uploads/enrs:/app/uploads:rw
+      - ./logs/enrs:/app/logs:rw
+    environment:
+      NODE_ENV: ${NODE_ENV}
+      PORT: ${ENRS_BACKEND_PORT}
+      LOG_LEVEL: ${LOG_LEVEL}
+
+      CORS_ORIGIN: "https://${SERVER_NAME}"
+
+      # Database — ENRS backend config reads DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD
+      DB_HOST: ${POSTGRES_HOST}
+      DB_PORT: ${POSTGRES_PORT}
+      DB_NAME: ${ENRS_DB_NAME}
+      DB_USER: ${ENRS_DB_USER}
+      DB_PASSWORD: ${ENRS_DB_PASSWORD}
+      DB_SSL: "false"
+      DB_POOL_MAX: 10
+
+      # Redis — ENRS uses DB index 1 (DB 0 is reserved for CC if CC ever uses Redis)
+      REDIS_HOST: ${REDIS_HOST}
+      REDIS_PORT: ${REDIS_PORT}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDIS_DB: ${REDIS_ENRS_DB}
+
+      # FreeSWITCH ESL — ENRS backend uses ESL_* prefix (no FS_ prefix)
+      ESL_HOST: ${FS_ESL_HOST}
+      ESL_PORT: ${FS_ESL_PORT}
+      ESL_PASSWORD: ${FS_ESL_PASSWORD}
+      ESL_RECONNECT_MS: ${FS_ESL_RECONNECT_MS}
+
+      # SIP domain for dial-string construction
+      SIP_DOMAIN: ${SIP_DOMAIN}
+      ESL_DOMAIN: ${SIP_DOMAIN}
+
+      # FreeSWITCH paths — ENRS backend reads FS_CONF_DIR, FS_SCRIPT_DIR, etc.
+      FS_BASE_DIR: ${FS_BASE_DIR}
+      FS_CONF_DIR: ${FS_CONF_DIR}
+      FS_DIALPLAN_DIR: ${FS_DIALPLAN_DIR}
+      FS_DIRECTORY_DIR: ${FS_DIRECTORY_DIR}
+      FS_SIP_PROFILE_DIR: ${FS_SIP_PROFILE_DIR}
+      FS_SCRIPT_DIR: ${FS_SCRIPT_DIR}
+      FS_SOUND_DIR: ${FS_SOUND_DIR}
+      FS_RECORDING_DIR: ${FS_RECORDING_DIR}
+      FS_STORAGE_DIR: ${FS_STORAGE_DIR}
+      FS_DB_DIR: ${FS_DB_DIR}
+      FS_LOG_DIR: ${FS_LOG_DIR}
+
+      # JWT — ENRS uses dual-token system
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      JWT_ACCESS_EXPIRY: ${JWT_ACCESS_EXPIRY}
+      JWT_REFRESH_EXPIRY: ${JWT_REFRESH_EXPIRY}
+
+      # Internal API key — must match FreeSWITCH vars.xml FS_INTERNAL_KEY
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY}
+
+      # ENRS → FreeSWITCH integration
+      # URL that Lua scripts use to call this backend (Lua runs on host, port is bound to loopback)
+      ENRS_API_URL: ${ENRS_API_URL}
+      FS_TTS_ENGINE: ${FS_TTS_ENGINE}
+      FS_DEFAULT_GATEWAY: ${FS_DEFAULT_GATEWAY}
+      ENS_ORIGINATE_MODE: ${ENS_ORIGINATE_MODE}
+
+      # Upload directory inside the container (matches the bind mount target above)
+      UPLOAD_DIR: /app/uploads
+      UPLOAD_MAX_MB: ${UPLOAD_MAX_MB}
+
+      # Socket.IO path — must match VITE_SOCKET_PATH build arg in enrs-frontend
+      SOCKET_PATH: ${ENRS_SOCKET_PATH}
+
+      # First-boot admin user (ENRS only — CC has its own user system)
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # /health/ready confirms DB + ESL connections (not just process alive)
+      test: ["CMD-SHELL", "wget -qO- http://localhost:${ENRS_BACKEND_PORT}/health/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: { max-size: "100m", max-file: "5" }
+
+  ##############################################################################
+  # CC FRONTEND
+  ##############################################################################
+  # Static Vite bundle. Build args are baked in at build time — not runtime.
+  # Rebuild the image if you change BASE_PATH or SOCKET_PATH.
+
+  cc-frontend:
+    image: ${CC_FRONTEND_IMAGE}
+    build:
+      context: ../fs-cc/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${CC_BASE_PATH}
+        VITE_SOCKET_PATH: ${CC_SOCKET_PATH}
+    container_name: omni-cc-frontend
+    restart: unless-stopped
+    networks:
+      - omni-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  ##############################################################################
+  # AGENT DESKTOP
+  ##############################################################################
+  # Served at /agent/ but connects to the CC backend (shares SOCKET_PATH /cc/socket.io).
+
+  agent-desktop:
+    image: ${AGENT_IMAGE}
+    build:
+      context: ../fs-cc/agent-desktop
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${AGENT_BASE_PATH}
+        # Agent Desktop connects to the CC backend — same socket path as cc-frontend
+        VITE_SOCKET_PATH: ${CC_SOCKET_PATH}
+    container_name: omni-agent-desktop
+    restart: unless-stopped
+    networks:
+      - omni-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  ##############################################################################
+  # ENRS FRONTEND
+  ##############################################################################
+
+  enrs-frontend:
+    image: ${ENRS_FRONTEND_IMAGE}
+    build:
+      context: ../fs-enrs/frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BASE_PATH: ${ENRS_BASE_PATH}
+        VITE_SOCKET_PATH: ${ENRS_SOCKET_PATH}
+    container_name: omni-enrs-frontend
+    restart: unless-stopped
+    networks:
+      - omni-net
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options: { max-size: "20m", max-file: "3" }
+
+  ##############################################################################
+  # NGINX — Common Reverse Proxy
+  ##############################################################################
+  # Single ingress point. Terminates TLS, routes by path, upgrades WebSockets.
+  # SERVER_NAME and SSL_CERT/SSL_KEY are substituted into nginx.conf at startup
+  # via envsubst (nginx:alpine entrypoint processes /etc/nginx/templates/*.template).
+
+  nginx:
+    image: ${NGINX_IMAGE}
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: omni-nginx
+    restart: unless-stopped
+    networks:
+      - omni-net
+    ports:
+      - "${HTTP_PORT}:80"
+      - "${HTTPS_PORT}:443"
+    volumes:
+      # TLS certificates — mount here, paths in .env point inside this mount
+      - ./ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx:rw
+    environment:
+      # Substituted into omni.conf.template by nginx entrypoint at startup
+      SERVER_NAME: ${SERVER_NAME}
+      SSL_CERT: ${SSL_CERT}
+      SSL_KEY: ${SSL_KEY}
+    depends_on:
+      cc-backend:
+        condition: service_healthy
+      enrs-backend:
+        condition: service_healthy
+      cc-frontend:
+        condition: service_healthy
+      agent-desktop:
+        condition: service_healthy
+      enrs-frontend:
+        condition: service_healthy
+    healthcheck:
+      # Probe the HTTP redirect server (port 80) — no TLS, no -k needed
+      test: ["CMD-SHELL", "wget -qO- http://localhost/_health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options: { max-size: "100m", max-file: "5" }

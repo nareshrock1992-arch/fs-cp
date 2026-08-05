@@ -1,0 +1,3 @@
+-- This file is intentionally empty.
+-- Database creation is handled by 01_users.sh which has access to
+-- CC_DB_NAME, ENRS_DB_NAME env vars from the docker-compose.yml postgres service.

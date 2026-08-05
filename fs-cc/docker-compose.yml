@@ -1,0 +1,117 @@
+version: "3.9"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FreeSWITCH Contact Center — Docker Compose
+#
+# Customer deployment:
+#   cp .env.example .env
+#   vi .env          # set SERVER_IP, FS_ESL_HOST, DB_PASSWORD, JWT_SECRET
+#   docker compose up -d
+#
+# All IPs and secrets come from .env — no source code changes ever needed.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ────────────────────────────────────────────────────────────
+  db:
+    image: postgres:14-alpine
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      POSTGRES_DB:       ${DB_NAME:-fs_cc}
+      POSTGRES_USER:     ${DB_USER:-fs_cc}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./backend/db/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./backend/db/migrate_auth.sql:/docker-entrypoint-initdb.d/02_migrate_auth.sql:ro
+      - ./backend/db/migrate_ivr.sql:/docker-entrypoint-initdb.d/03_migrate_ivr.sql:ro
+      - ./backend/db/migrate_reporting.sql:/docker-entrypoint-initdb.d/04_migrate_reporting.sql:ro
+      - ./backend/db/migrate_cdr_views.sql:/docker-entrypoint-initdb.d/05_migrate_cdr_views.sql:ro
+      - ./backend/db/migrate_indexes.sql:/docker-entrypoint-initdb.d/06_migrate_indexes.sql:ro
+      - ./backend/db/migrate_agent_auth.sql:/docker-entrypoint-initdb.d/07_migrate_agent_auth.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-fs_cc} -d ${DB_NAME:-fs_cc}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [cc-net]
+
+  # ── Backend API + ESL bridge ──────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      NODE_ENV: production
+      # DB_HOST overridden to the compose service name — all other DB values
+      # come from .env via env_file above.
+      DB_HOST: db
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "${BACKEND_PORT:-4000}:4000"
+    healthcheck:
+      # Use localhost (internal to the container) — never the server IP.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    networks: [cc-net]
+
+  # ── Frontend (Nginx + React SPA) ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # The frontend uses ONLY relative paths (/api, /socket.io).
+        # Nginx proxies them to the backend container — no IP required here.
+        VITE_API_URL: /api
+        VITE_SOCKET_URL: ""
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8000}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks: [cc-net]
+
+  # ── Agent Desktop (port 8080) ─────────────────────────────────────────────
+  agent-desktop:
+    build:
+      context: ./agent-desktop
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+        VITE_SOCKET_URL: ""
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${AGENT_DESKTOP_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+    networks: [cc-net]
+
+volumes:
+  db_data:
+    name: fscc_db_data
+
+networks:
+  cc-net:
+    driver: bridge
