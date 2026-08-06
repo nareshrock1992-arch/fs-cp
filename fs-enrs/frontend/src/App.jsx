@@ -1,0 +1,139 @@
+import { Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect } from 'react';
+import { useTheme } from './hooks/useTheme.js';
+import { useAuthStore } from './store/authStore.js';
+
+import AppShell      from './components/layout/AppShell.jsx';
+import Login         from './pages/Login.jsx';
+import Dashboard     from './pages/Dashboard.jsx';
+import Monitoring    from './pages/Monitoring.jsx';
+import UserList      from './pages/users/UserList.jsx';
+import OrgList       from './pages/organizations/OrgList.jsx';
+import LocationList  from './pages/organizations/LocationList.jsx';
+import DeptList      from './pages/organizations/DeptList.jsx';
+import ContactList   from './pages/contacts/ContactList.jsx';
+import GroupList     from './pages/groups/GroupList.jsx';
+import EnsList       from './pages/ens/EnsList.jsx';
+import ErsConfigList from './pages/ers/ErsConfigList.jsx';
+import ErsLive       from './pages/ers/ErsLive.jsx';
+import IvrList       from './pages/ivr/IvrList.jsx';
+import IvrBuilder    from './pages/ivr/IvrBuilder.jsx';
+import ReportNotifications from './pages/reports/ReportNotifications.jsx';
+import ReportIncidents     from './pages/reports/ReportIncidents.jsx';
+import ReportContactUsage  from './pages/reports/ReportContactUsage.jsx';
+import ReportErsIncidents  from './pages/reports/ReportErsIncidents.jsx';
+import ReportEnsBroadcasts from './pages/reports/ReportEnsBroadcasts.jsx';
+import ErsReport           from './pages/reports/ErsReport.jsx';
+import EnsReport           from './pages/reports/EnsReport.jsx';
+import SettingsPage        from './pages/settings/SettingsPage.jsx';
+import TelephonyGateways   from './pages/settings/TelephonyGateways.jsx';
+import SysVarsPage         from './pages/settings/SysVarsPage.jsx';
+import SwitchCorePage      from './pages/settings/SwitchCorePage.jsx';
+import EventSocketPage     from './pages/settings/EventSocketPage.jsx';
+import AclPage             from './pages/settings/AclPage.jsx';
+import SipProfilesPage    from './pages/settings/SipProfilesPage.jsx';
+import ConferencePage          from './pages/settings/ConferencePage.jsx';
+import GatewayCollectionPage  from './pages/settings/GatewayCollectionPage.jsx';
+import DialplanPage            from './pages/settings/DialplanPage.jsx';
+import ConfigCenter            from './platform/config/ConfigCenter.jsx';
+import ConfigDashboard     from './platform/config/ConfigDashboard.jsx';
+import AudioLibrary        from './pages/audio/AudioLibrary.jsx';
+import MediaLibrary        from './pages/media/MediaLibrary.jsx';
+import Recordings          from './pages/recordings/Recordings.jsx';
+import DeploymentDashboard from './pages/deployment/DeploymentDashboard.jsx';
+import ServiceRegistry     from './pages/services/ServiceRegistry.jsx';
+import CampaignDashboard   from './pages/ens/CampaignDashboard.jsx';
+import ErrorBoundary        from './components/ui/ErrorBoundary.jsx';
+
+function RequireAuth({ children }) {
+  const token = useAuthStore(s => s.token);
+  return token ? children : <Navigate to="/login" replace />;
+}
+
+function RequireAdmin({ children }) {
+  const user = useAuthStore(s => s.user);
+  if (!user) return <Navigate to="/login" replace />;
+  if (user.role !== 'ADMIN') return <Navigate to="/" replace />;
+  return children;
+}
+
+export default function App() {
+  const { theme } = useTheme();
+
+  // Keep <html> class in sync (useTheme already does this via useEffect but
+  // calling here ensures the theme applies before first paint on hydration)
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+  }, [theme]);
+
+  return (
+    <ErrorBoundary>
+    <Routes>
+      <Route path="/login" element={<Login />} />
+
+      <Route element={<RequireAuth><AppShell /></RequireAuth>}>
+        <Route index                        element={<Dashboard />} />
+        <Route path="monitoring"            element={<Monitoring />} />
+
+        {/* Service Registry */}
+        <Route path="services"              element={<ServiceRegistry />} />
+
+        {/* Emergency Config */}
+        <Route path="ens"                   element={<EnsList />} />
+        <Route path="ens/campaigns"         element={<CampaignDashboard />} />
+        <Route path="ers"                   element={<ErsConfigList />} />
+        <Route path="ers/live"              element={<ErsLive />} />
+
+        {/* IVR */}
+        <Route path="ivr"                   element={<IvrList />} />
+        <Route path="ivr/:uuid"             element={<IvrBuilder />} />
+
+        {/* Media Library + Deployment */}
+        <Route path="media"                 element={<MediaLibrary />} />
+        <Route path="audio"                 element={<AudioLibrary />} />
+        <Route path="deployment"            element={<DeploymentDashboard />} />
+
+        {/* Conference Recordings */}
+        <Route path="recordings"            element={<Recordings />} />
+
+        {/* Organization */}
+        <Route path="organizations"         element={<OrgList />} />
+        <Route path="locations"             element={<LocationList />} />
+        <Route path="departments"           element={<DeptList />} />
+        <Route path="contacts"             element={<ContactList />} />
+        <Route path="groups"               element={<GroupList />} />
+
+        {/* Reports — unified */}
+        <Route path="reports/ers"           element={<ErsReport />} />
+        <Route path="reports/ens"           element={<EnsReport />} />
+        <Route path="reports/contact-usage" element={<ReportContactUsage />} />
+        {/* Legacy report routes — kept so old bookmarks still work */}
+        <Route path="reports/notifications" element={<ReportNotifications />} />
+        <Route path="reports/incidents"     element={<ReportIncidents />} />
+        <Route path="reports/ers-incidents"  element={<ReportErsIncidents />} />
+        <Route path="reports/ens-broadcasts" element={<ReportEnsBroadcasts />} />
+
+        {/* Admin-only */}
+        <Route path="users"    element={<RequireAdmin><UserList /></RequireAdmin>} />
+        <Route path="settings" element={<RequireAdmin><SettingsPage /></RequireAdmin>} />
+        <Route path="settings/gateways" element={<RequireAdmin><TelephonyGateways /></RequireAdmin>} />
+
+        {/* Platform Configuration Center (Phase 7) */}
+        <Route path="config" element={<RequireAdmin><ConfigCenter /></RequireAdmin>}>
+          <Route index element={<ConfigDashboard />} />
+          <Route path="vars"         element={<SysVarsPage />} />
+          <Route path="switch"       element={<SwitchCorePage />} />
+          <Route path="event-socket" element={<EventSocketPage />} />
+          <Route path="acl"          element={<AclPage />} />
+          <Route path="sip-profiles" element={<SipProfilesPage />} />
+          <Route path="conference"   element={<ConferencePage />} />
+          <Route path="gateways"     element={<GatewayCollectionPage />} />
+          <Route path="dialplan"     element={<DialplanPage />} />
+        </Route>
+
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Route>
+    </Routes>
+    </ErrorBoundary>
+  );
+}

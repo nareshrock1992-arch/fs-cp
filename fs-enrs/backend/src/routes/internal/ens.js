@@ -1,0 +1,48 @@
+import { Router } from 'express';
+import * as ctrl from '../../controllers/internal/ensInternalController.js';
+import { logger } from '../../infrastructure/index.js';
+
+const router = Router();
+
+// ── TEMPORARY DEBUG — remove after ENS blast investigation ───────────────────
+router.use((req, _res, next) => {
+  if (req.method === 'POST') {
+    logger.info({
+      module:  'ENS_DEBUG',
+      tag:     'PHASE1_INCOMING_REQUEST',
+      method:  req.method,
+      url:     req.originalUrl,
+      body:    req.body,
+    }, `[ENS_DEBUG] ▶ Incoming POST → ${req.originalUrl}`);
+  }
+  next();
+});
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Number → config lookup (ens_blast_trigger.lua / ens_playback_handler.lua first call)
+router.get('/lookup', ctrl.ensLookup);
+
+// PIN authentication — Lua calls this after collecting DTMF, before recording
+router.post('/verify-pin', ctrl.verifyPin);
+
+// Campaign engine — Lua triggers after recording message
+router.post('/campaign/start',           ctrl.startCampaign);
+// IVR ENS node — already has configuration_id, skips trigger_number lookup
+router.post('/campaign/start-by-config', ctrl.startCampaignByConfig);
+
+// Blast state management
+router.get('/notifications/queue-status',         ctrl.ensQueueStatus);
+router.post('/notifications',                     ctrl.ensCreateNotification);
+router.get('/notifications/:uuid/pending-contacts', ctrl.ensPendingContacts);
+router.patch('/notifications/:uuid/delivery',     ctrl.ensUpdateDelivery);
+router.post('/notifications/:uuid/complete',      ctrl.ensCompleteNotification);
+
+// Playback number (1999) — get latest campaign recording
+router.get('/campaigns/latest',         ctrl.ensLatestCampaign);
+router.get('/campaigns/:id/playback-log', ctrl.ensPlaybackLog);
+
+// Callback replay (ens_playback_handler.lua)
+router.get('/callbacks/authorize', ctrl.ensAuthorizeCallback);
+router.post('/callbacks',          ctrl.ensLogCallback);
+
+export default router;
