@@ -1,0 +1,20 @@
+# Runtime secrets — never commit
+.env
+
+# TLS certificates
+ssl/*.pem
+ssl/*.crt
+ssl/*.key
+ssl/*.p12
+ssl/*.pfx
+
+# Keep the ACME webroot directory but not its contents
+!ssl/acme/
+!ssl/acme/.gitkeep
+
+# Container and application logs
+logs/
+
+# OS junk
+.DS_Store
+Thumbs.db

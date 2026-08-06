@@ -19,7 +19,7 @@
 # ENRS migrations run automatically on every container start (idempotent).
 ###############################################################################
 
-name: omni
+name: ${COMPOSE_PROJECT_NAME:-omni}
 
 ###############################################################################
 # NETWORKS
@@ -186,8 +186,6 @@ services:
 
     depends_on:
       postgres:
-        condition: service_healthy
-      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:${CC_BACKEND_PORT}/api/health || exit 1"]
@@ -426,6 +424,8 @@ services:
       # TLS certificates — mount here, paths in .env point inside this mount
       - ./ssl:/etc/nginx/ssl:ro
       - ./logs/nginx:/var/log/nginx:rw
+      # ACME webroot for certbot --webroot renewals
+      - ./ssl/acme:/usr/share/nginx/html/.well-known/acme-challenge:ro
     environment:
       # Substituted into omni.conf.template by nginx entrypoint at startup
       SERVER_NAME: ${SERVER_NAME}
