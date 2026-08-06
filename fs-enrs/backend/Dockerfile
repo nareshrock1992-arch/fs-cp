@@ -27,11 +27,16 @@ RUN apk add --no-cache tini wget
 WORKDIR /app
 
 COPY --from=deps /app/node_modules ./node_modules
+
+# Copy the entrypoint first (separate layer — changes rarely)
+COPY docker-entrypoint.sh /docker-entrypoint.sh
+
 COPY . .
 
-# The ENRS backend auto-runs migrate.js on startup (server.js calls it before
-# binding the HTTP server), so no manual migration step is required.
-RUN mkdir -p uploads logs recordings \
+# Entrypoint runs migrations before starting the server (runs as root during
+# build so it can chmod; the node user runs it at container start time).
+RUN chmod +x /docker-entrypoint.sh \
+    && mkdir -p uploads logs recordings \
     && chown -R node:node /app
 
 USER node
@@ -41,10 +46,14 @@ EXPOSE 4100
 # ENRS exposes richer health endpoints:
 #   /health/live  — process is alive (no external deps)
 #   /health/ready — DB + ESL connections established (gates load balancer traffic)
-# Use /health/ready so Docker only marks the container healthy when it can
-# actually serve real requests.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=3 \
+#
+# start-period covers migration time on a fresh database (schema.sql + all
+# numbered migrations). Idempotent runs on an existing database are ~2 s.
+# Allow 90 s so even a first-boot with 30+ migration files has headroom.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=5 \
   CMD wget -qO- http://localhost:4100/health/ready || exit 1
 
-ENTRYPOINT ["/sbin/tini", "--"]
+# tini (PID 1) → /docker-entrypoint.sh → exec node server.js
+# The exec replaces the shell process so tini manages node directly.
+ENTRYPOINT ["/sbin/tini", "--", "/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

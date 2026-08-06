@@ -13,10 +13,11 @@
 #   docker compose ps                 # status + health
 #   docker compose logs -f <service>  # tail logs for one service
 #
-# First deploy — CC migrations are NOT idempotent, run once:
-#   docker compose exec cc-backend node db/init.js
+# After first deploy, run the post-install script (handles CC migration):
+#   bash deploy/scripts/post-install.sh
 #
-# ENRS migrations run automatically on every container start (idempotent).
+# ENRS migrations run automatically in the container entrypoint (idempotent).
+# CC migrations run once via post-install.sh (the script skips them on re-run).
 ###############################################################################
 
 name: ${COMPOSE_PROJECT_NAME:-omni}
@@ -313,8 +314,11 @@ services:
       test: ["CMD-SHELL", "wget -qO- http://localhost:${ENRS_BACKEND_PORT}/health/ready || exit 1"]
       interval: 15s
       timeout: 5s
-      retries: 3
-      start_period: 60s
+      retries: 5
+      # 120 s covers migration time on a fresh database (schema.sql + all numbered
+      # migrations run in the docker-entrypoint.sh before server.js starts).
+      # Subsequent restarts (existing DB) complete in ~5 s — the extra headroom is free.
+      start_period: 120s
     logging:
       driver: json-file
       options: { max-size: "100m", max-file: "5" }

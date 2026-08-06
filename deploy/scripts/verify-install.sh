@@ -43,16 +43,34 @@ FS_ESL_PORT=$(parse_var FS_ESL_PORT)
 FS_CONF_DIR=$(parse_var FS_CONF_DIR)
 FS_SCRIPT_DIR=$(parse_var FS_SCRIPT_DIR)
 FS_RECORDING_DIR=$(parse_var FS_RECORDING_DIR)
-COMPOSE_PROJECT=$(parse_var COMPOSE_PROJECT_NAME)
-COMPOSE_PROJECT="${COMPOSE_PROJECT:-omni}"
+POSTGRES_ADMIN_USER=$(parse_var POSTGRES_ADMIN_USER)
+POSTGRES_ADMIN_USER="${POSTGRES_ADMIN_USER:-postgres}"
+CC_DB_NAME=$(parse_var CC_DB_NAME)
+CC_DB_NAME="${CC_DB_NAME:-fs_cc}"
+ENRS_DB_NAME=$(parse_var ENRS_DB_NAME)
+ENRS_DB_NAME="${ENRS_DB_NAME:-fs_enrs}"
+REDIS_PASSWORD=$(parse_var REDIS_PASSWORD)
 
 COMPOSE="docker compose"
 ${COMPOSE} version &>/dev/null 2>&1 || COMPOSE="docker-compose"
 
+# Change into the deploy directory so all "docker compose" commands find
+# docker-compose.yml without needing --project-directory on every call.
+cd "${DEPLOY_DIR}"
+
+# Resolve a service to its container ID via compose — works regardless of
+# whether docker-compose.yml uses explicit container_name or auto-naming.
+_container_id() {
+  local SVC="$1"
+  ${COMPOSE} ps -q "${SVC}" 2>/dev/null | head -1
+}
+
 container_health() {
   local SVC="$1"
-  docker inspect --format='{{.State.Health.Status}}' \
-    "${COMPOSE_PROJECT}-${SVC}-1" 2>/dev/null || echo "missing"
+  local ID
+  ID=$(_container_id "${SVC}")
+  if [[ -z "${ID}" ]]; then echo "missing"; return; fi
+  docker inspect --format='{{.State.Health.Status}}' "${ID}" 2>/dev/null || echo "missing"
 }
 
 check_http() {
@@ -176,11 +194,11 @@ if [[ "${PG_STATUS}" == "healthy" ]]; then
   pass "PostgreSQL container: healthy"
 
   CC_TABLES=$(${COMPOSE} exec -T postgres \
-    psql -U postgres -d fs_cc -t -c \
+    psql -U "${POSTGRES_ADMIN_USER}" -d "${CC_DB_NAME}" -t -c \
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
     2>/dev/null | tr -d ' \n' || echo "0")
   ENRS_TABLES=$(${COMPOSE} exec -T postgres \
-    psql -U postgres -d fs_enrs -t -c \
+    psql -U "${POSTGRES_ADMIN_USER}" -d "${ENRS_DB_NAME}" -t -c \
     "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
     2>/dev/null | tr -d ' \n' || echo "0")
 
@@ -207,9 +225,10 @@ step "Redis"
 REDIS_STATUS=$(container_health "redis")
 if [[ "${REDIS_STATUS}" == "healthy" ]]; then
   pass "Redis container: healthy"
-  REDIS_PING=$(${COMPOSE} exec -T redis redis-cli --no-auth-warning ping 2>/dev/null || echo "FAIL")
+  REDIS_PING=$(${COMPOSE} exec -T redis \
+    redis-cli --no-auth-warning -a "${REDIS_PASSWORD}" ping 2>/dev/null || echo "FAIL")
   [[ "${REDIS_PING}" == "PONG" ]] && pass "Redis PING: PONG" \
-    || warn "Redis PING failed — may require auth (password-protected)"
+    || warn "Redis PING failed — check REDIS_PASSWORD in .env"
 else
   fail "Redis not healthy"
 fi
