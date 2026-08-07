@@ -1,13 +1,10 @@
 import axios from 'axios';
 import { getToken, clearToken } from '../hooks/useAuth.js';
 
-// In production (Docker + Nginx) the frontend is served by Nginx which also
-// reverse-proxies /api/* → backend:4000. So the relative path /api is enough.
-//
-// In dev the Vite dev server proxy (vite.config.js) does the same job.
-//
-// VITE_API_URL should always be "/api" (relative). Absolute URLs with IPs
-// are never needed here — the proxy handles routing.
+// VITE_API_URL is baked in at build time:
+//   Dev  (npm run dev):  /api      — Vite proxy forwards /api/* → cc-backend:4000
+//   Prod (Docker/nginx): /cc/api   — nginx routes /cc/api/* → cc-backend /api/*
+// Never hardcode an IP or absolute URL here — the proxy/nginx handles routing.
 const API_URL = import.meta.env.VITE_API_URL || '/api';
 
 export const api = axios.create({
@@ -28,7 +25,8 @@ api.interceptors.response.use(
   err => {
     if (err.response?.status === 401) {
       clearToken();
-      window.location.href = '/login';
+      // Redirect to login within the same sub-path prefix (BASE_URL = /cc/ in prod, / in dev)
+      window.location.href = (import.meta.env.BASE_URL || '/') + 'login';
     }
     return Promise.reject(err);
   }

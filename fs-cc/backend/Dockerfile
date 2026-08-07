@@ -50,7 +50,7 @@ EXPOSE 4000
 # Healthcheck polls the public health endpoint.
 # start_period allows time for ESL to connect and DB pool to warm.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
-  CMD wget -qO- http://localhost:4000/api/health || exit 1
+  CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
 
 # tini as entrypoint ensures:
 #   1. Zombie reaping (tini is a proper init process)

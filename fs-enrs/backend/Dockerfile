@@ -51,7 +51,7 @@ EXPOSE 4100
 # numbered migrations). Idempotent runs on an existing database are ~2 s.
 # Allow 90 s so even a first-boot with 30+ migration files has headroom.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=5 \
-  CMD wget -qO- http://localhost:4100/health/ready || exit 1
+  CMD wget -qO- http://127.0.0.1:4100/health/ready || exit 1
 
 # tini (PID 1) → /docker-entrypoint.sh → exec node server.js
 # The exec replaces the shell process so tini manages node directly.

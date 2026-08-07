@@ -6,9 +6,18 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
+# VITE_BASE_PATH   — Vite --base; sets import.meta.env.BASE_URL for asset URLs.
+# VITE_API_URL     — API base the browser sends requests to.
+#                      Dev:  /api/v1        — Vite proxy forwards to enrs-backend
+#                      Prod: /enrs/api/v1   — nginx routes /enrs/api/* → enrs-backend/api/*
+# VITE_SOCKET_PATH — Socket.IO handshake path.
+#                      Dev:  /socket.io         — Vite proxy
+#                      Prod: /enrs/socket.io    — nginx routes to enrs-backend
 ARG VITE_BASE_PATH=/enrs/
+ARG VITE_API_URL=/enrs/api/v1
 ARG VITE_SOCKET_PATH=/enrs/socket.io
 
+ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_SOCKET_PATH=${VITE_SOCKET_PATH}
 
 COPY package.json package-lock.json* ./

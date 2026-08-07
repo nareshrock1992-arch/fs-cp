@@ -300,12 +300,13 @@ openssl x509 -enddate -noout -in /opt/omni/deploy/ssl/fullchain.pem
 
 ## Platform Health Endpoints
 
-These endpoints are accessible from `localhost` only (backends are bound to `127.0.0.1`):
+These endpoints are accessible from the host only (backends bind to `127.0.0.1`):
 
-| Endpoint | Expected |
-|----------|---------|
-| `http://127.0.0.1:4000/api/health` | `{"status":"ok"}` |
-| `http://127.0.0.1:4100/api/health` | `{"status":"ok"}` |
+| Endpoint | Expected | Notes |
+|----------|---------|-------|
+| `http://127.0.0.1:4000/api/health` | `{"status":"ok"}` | CC backend |
+| `http://127.0.0.1:4100/health/live` | `{"status":"ok"}` | ENRS process alive (no external deps) |
+| `http://127.0.0.1:4100/health/ready` | `{"status":"ok"}` | ENRS DB + ESL connected (used by Docker HEALTHCHECK) |
 
 Via nginx (requires TLS, self-signed):
 

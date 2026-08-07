@@ -20,10 +20,23 @@ WORKDIR /app
 # VITE_SOCKET_PATH — Path the Socket.IO client sends the upgrade request to.
 #                    Must match the SOCKET_PATH env on the cc-backend container
 #                    and the nginx location block.
+# VITE_BASE_PATH   — Vite --base: sets import.meta.env.BASE_URL; used by BrowserRouter basename
+#                    and for static asset URL generation (JS/CSS hrefs in index.html).
+# VITE_API_URL     — API base the browser sends requests to. In prod this must include the
+#                    sub-path prefix so nginx can route it:
+#                      Dev  (npm run dev):  /api           — Vite proxy forwards to cc-backend
+#                      Prod (Docker/nginx): /cc/api        — nginx routes /cc/api/* → cc-backend/api/*
+# VITE_SOCKET_PATH — Socket.IO handshake path. Must match the nginx location block and
+#                    the SOCKET_PATH env on cc-backend:
+#                      Dev:  /socket.io       — Vite proxy forwards to cc-backend
+#                      Prod: /cc/socket.io    — nginx routes /cc/socket.io → cc-backend
 ARG VITE_BASE_PATH=/cc/
+ARG VITE_API_URL=/cc/api
 ARG VITE_SOCKET_PATH=/cc/socket.io
 
-# Expose to Vite's env substitution system (VITE_ prefix)
+# System env vars set here take precedence over values in the copied .env file
+# (Vite resolves VITE_* system env vars before .env files).
+ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_SOCKET_PATH=${VITE_SOCKET_PATH}
 
 COPY package.json package-lock.json* ./

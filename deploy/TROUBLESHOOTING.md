@@ -51,12 +51,13 @@ docker compose logs <service>
 ### Container stays `unhealthy`
 
 ```bash
-# Check healthcheck output
-docker inspect --format='{{json .State.Health}}' omni-cc-backend-1 | python3 -m json.tool
+# Check healthcheck output (resolve container ID via compose — works regardless of container_name)
+docker inspect --format='{{json .State.Health}}' \
+  "$(docker compose ps -q cc-backend)" | python3 -m json.tool
 
 # Check what the healthcheck is testing
-docker compose exec cc-backend wget -qO- http://localhost:4000/api/health
-docker compose exec enrs-backend wget -qO- http://localhost:4100/api/health
+docker compose exec cc-backend wget -qO- http://127.0.0.1:4000/api/health
+docker compose exec enrs-backend wget -qO- http://127.0.0.1:4100/health/ready
 ```
 
 **nginx stays unhealthy:**
@@ -90,13 +91,22 @@ docker compose exec cc-backend node db/init.js
 
 ### ENRS backend: migration error on startup
 
+The ENRS backend runs `migrate.js` automatically inside the container entrypoint before `server.js` starts. If the migration fails, the container exits and Docker retries it — the container will keep restarting until the migration succeeds or the root cause is fixed.
+
 ```bash
 docker compose logs enrs-backend | grep -i "migrat\|error\|fatal"
 ```
 
 Common causes:
-- PostgreSQL not ready — wait for postgres healthy then restart enrs-backend
-- Wrong `ENRS_DB_PASSWORD` — verify the password matches what postgres was initialized with
+- **PostgreSQL not ready** — `depends_on` ensures postgres is healthy before enrs-backend starts, but if the DB container was just created, allow 15–30 s for it to accept connections. Restart enrs-backend once postgres is confirmed healthy.
+- **Wrong `ENRS_DB_PASSWORD`** — the password in `.env` does not match what postgres was initialized with. Verify `ENRS_DB_PASSWORD` matches in both the `postgres` and `enrs-backend` service sections.
+- **First-time start takes longer than expected** — the `start_period` in docker-compose.yml is 120 s. On a fresh database, schema.sql plus all numbered migrations can take 30–60 s. Allow the full start_period before declaring it stuck.
+
+To manually trigger a migration run (for debugging only — the entrypoint does this automatically on restart):
+
+```bash
+docker compose exec enrs-backend node src/db/migrate.js
+```
 
 ### Cannot connect to PostgreSQL
 
@@ -150,6 +160,28 @@ docker compose restart enrs-backend
 ---
 
 ## nginx Problems
+
+### nginx restart loop on startup
+
+nginx enters a restart loop if any upstream dependency container is not healthy. The `depends_on` in `docker-compose.yml` gates nginx startup on all backends and frontends being healthy, so a loop here always means one of the upstreams is failing.
+
+```bash
+# Find the unhealthy upstream
+docker compose ps
+
+# Check the failing service
+docker compose logs <unhealthy-service>
+```
+
+Resolve the upstream issue first, then nginx will start automatically once all upstreams are healthy.
+
+**If nginx starts but immediately exits with a config error:**
+
+```bash
+docker compose logs nginx
+```
+
+Check for duplicate directive errors (e.g., `proxy_buffering` defined twice). The nginx configuration includes `snippets/proxy.conf` into every location block — any directive in that file must not be repeated in individual location blocks.
 
 ### 502 Bad Gateway
 
@@ -375,8 +407,8 @@ sudo chown -R 1000:1000 deploy/uploads/
 ## General Debugging Commands
 
 ```bash
-# Container inspect
-docker inspect omni-enrs-backend-1
+# Container inspect (resolve via compose to avoid guessing the container name)
+docker inspect "$(docker compose ps -q enrs-backend)"
 
 # Container environment variables
 docker compose exec enrs-backend env | sort

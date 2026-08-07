@@ -174,17 +174,22 @@ docker compose build
 docker compose up -d
 ```
 
-Wait for all containers to be healthy (~60 seconds):
+Wait for all containers to be healthy. On a fresh install, the ENRS backend runs database migrations before starting — this takes 1–3 minutes. Subsequent starts (existing database) complete in under 30 seconds.
 
 ```bash
-docker compose ps
+# Poll status — repeat until all show (healthy)
+watch -n 5 docker compose ps
 ```
 
-All services should show `(healthy)`. If any service stays unhealthy:
+All services should show `(healthy)`. If any service stays unhealthy after 3 minutes:
 
 ```bash
 docker compose logs <service-name>
 ```
+
+**Expected startup order:** `postgres` → `redis` → `cc-backend` + `enrs-backend` (parallel, enrs runs migrations) → `cc-frontend` + `agent-desktop` + `enrs-frontend` → `nginx`
+
+`nginx` only starts after all upstream containers are healthy — this is intentional.
 
 ---
 
@@ -290,6 +295,47 @@ Manually verify each item. Mark PASS or FAIL.
 | Recording directory writable | `ls -la $FS_RECORDING_DIR` shows correct owner | |
 | ERS test call | Conference bridge connects | |
 | ENS test blast | Campaign creates in DB | |
+
+---
+
+## ENRS Bootstrap Behaviour
+
+Understanding how the ENRS backend starts prevents confusion during the first deployment.
+
+### What happens on every container start
+
+The ENRS backend uses a custom Docker entrypoint (`docker-entrypoint.sh`) that runs before `server.js`:
+
+1. `docker-entrypoint.sh` runs `node src/db/migrate.js`
+2. `migrate.js` checks the `schema_migrations` table to find which files have already been applied
+3. **Fresh database:** applies `schema.sql` (the base schema) then all numbered migration files in order
+4. **Existing database:** skips already-applied files; applies only new ones (idempotent)
+5. `migrate.js` exits 0 → entrypoint calls `exec node server.js`
+6. `server.js` calls `validateSchema()` to confirm required tables exist, then opens the HTTP server
+
+If `migrate.js` exits non-zero (database not ready, SQL error), the entrypoint exits with the same code. Docker's `restart: unless-stopped` policy retries the full sequence — including migrations — on every restart.
+
+### Why the start_period is 120 seconds
+
+The first-boot migration applies `schema.sql` plus up to 15+ numbered migration files. On a production server this takes 30–90 seconds. The `start_period: 120s` in `docker-compose.yml` means the health check does not count failures during this window — the container is not marked unhealthy while migrations are running.
+
+Subsequent restarts skip all already-applied migrations and complete in ~2–5 seconds.
+
+### Recovery from migration failure
+
+If the ENRS backend is stuck restarting:
+
+```bash
+# See the actual migration error
+docker compose logs enrs-backend | grep -i "migrat\|error\|fatal\|FATAL"
+
+# Confirm postgres is healthy first
+docker compose ps postgres
+
+# Once the root cause is fixed, restart clears the loop automatically
+# (Docker retries the entrypoint including migrate.js)
+docker compose restart enrs-backend
+```
 
 ---
 

@@ -189,7 +189,7 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${CC_BACKEND_PORT}/api/health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${CC_BACKEND_PORT}/api/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -201,7 +201,8 @@ services:
   ##############################################################################
   # ENRS BACKEND
   ##############################################################################
-  # Auto-runs idempotent migrations on every start (server.js calls migrate.js).
+  # Auto-runs idempotent migrations on every start via docker-entrypoint.sh
+  # (calls migrate.js before server.js; container will not start if migration fails).
   # Port bound to loopback for Lua → backend calls (ENRS_API_URL).
 
   enrs-backend:
@@ -311,7 +312,7 @@ services:
         condition: service_healthy
     healthcheck:
       # /health/ready confirms DB + ESL connections (not just process alive)
-      test: ["CMD-SHELL", "wget -qO- http://localhost:${ENRS_BACKEND_PORT}/health/ready || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:${ENRS_BACKEND_PORT}/health/ready || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -336,13 +337,14 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_BASE_PATH: ${CC_BASE_PATH}
+        VITE_API_URL: ${CC_API_BASE}
         VITE_SOCKET_PATH: ${CC_SOCKET_PATH}
     container_name: omni-cc-frontend
     restart: unless-stopped
     networks:
       - omni-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/nginx-health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -363,14 +365,15 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_BASE_PATH: ${AGENT_BASE_PATH}
-        # Agent Desktop connects to the CC backend — same socket path as cc-frontend
+        # Agent Desktop connects to the CC backend — same API base and socket path as cc-frontend
+        VITE_API_URL: ${CC_API_BASE}
         VITE_SOCKET_PATH: ${CC_SOCKET_PATH}
     container_name: omni-agent-desktop
     restart: unless-stopped
     networks:
       - omni-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/nginx-health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -390,13 +393,14 @@ services:
       dockerfile: Dockerfile
       args:
         VITE_BASE_PATH: ${ENRS_BASE_PATH}
+        VITE_API_URL: ${ENRS_API_BASE}
         VITE_SOCKET_PATH: ${ENRS_SOCKET_PATH}
     container_name: omni-enrs-frontend
     restart: unless-stopped
     networks:
       - omni-net
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/nginx-health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/nginx-health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3
@@ -448,7 +452,7 @@ services:
         condition: service_healthy
     healthcheck:
       # Probe the HTTP redirect server (port 80) — no TLS, no -k needed
-      test: ["CMD-SHELL", "wget -qO- http://localhost/_health || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/_health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 3

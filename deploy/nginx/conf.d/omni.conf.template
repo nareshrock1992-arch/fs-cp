@@ -13,6 +13,7 @@
 #   /enrs/         → enrs-frontend:80
 #   /cc/api/       → cc-backend:4000   (strips /cc prefix)
 #   /enrs/api/     → enrs-backend:4100 (strips /enrs prefix)
+#   /enrs/api/v1/auth/      → enrs-backend:4100 (auth rate-limit: 5 r/s)
 #   /enrs/api/v1/internal/  → BLOCKED (Lua-only, never exposed externally)
 #   /cc/socket.io  → cc-backend:4000   (WebSocket upgrade)
 #   /enrs/socket.io→ enrs-backend:4100 (WebSocket upgrade)
@@ -147,10 +148,10 @@ server {
         return 403;
     }
 
-    location /enrs/api/auth/ {
+    location /enrs/api/v1/auth/ {
         include /etc/nginx/snippets/proxy.conf;
         limit_req zone=auth burst=10 nodelay;
-        proxy_pass http://enrs_backend/api/auth/;
+        proxy_pass http://enrs_backend/api/v1/auth/;
     }
 
     location /enrs/api/ {

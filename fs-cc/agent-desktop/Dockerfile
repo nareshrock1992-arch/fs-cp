@@ -10,13 +10,18 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-# VITE_BASE_PATH  — serves at /agent/ sub-path
-# VITE_SOCKET_PATH — connects to cc-backend which owns /cc/socket.io.
-#                    The agent desktop shares the CC backend, so the socket
-#                    path is /cc/socket.io, not /agent/socket.io.
+# VITE_BASE_PATH   — Vite --base; sets import.meta.env.BASE_URL for asset URLs.
+# VITE_API_URL     — API base the browser sends requests to.
+#                    Agent Desktop uses the CC backend (same as cc-frontend):
+#                      Dev:  /api      — Vite proxy forwards to cc-backend
+#                      Prod: /cc/api   — nginx routes /cc/api/* → cc-backend/api/*
+# VITE_SOCKET_PATH — Agent Desktop shares the CC backend socket path (/cc/socket.io),
+#                    NOT /agent/socket.io — nginx routes /cc/socket.io → cc-backend.
 ARG VITE_BASE_PATH=/agent/
+ARG VITE_API_URL=/cc/api
 ARG VITE_SOCKET_PATH=/cc/socket.io
 
+ENV VITE_API_URL=${VITE_API_URL}
 ENV VITE_SOCKET_PATH=${VITE_SOCKET_PATH}
 
 COPY package.json package-lock.json* ./
