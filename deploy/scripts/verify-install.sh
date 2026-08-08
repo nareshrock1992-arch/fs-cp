@@ -34,7 +34,13 @@ if [[ ! -f "${ENV_FILE}" ]]; then
   echo -e "${RED}ERROR${NC}: ${ENV_FILE} not found" >&2; exit 1
 fi
 
-parse_var() { grep -E "^${1}=" "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '"'"'"' '; }
+parse_var() {
+  grep -E "^${1}=" "${ENV_FILE}" \
+    | head -1 \
+    | cut -d= -f2- \
+    | sed -E 's/[[:space:]]+#.*$//' \
+    | tr -d '"'"'"
+}
 
 SERVER_NAME=$(parse_var SERVER_NAME)
 CC_BACKEND_PORT=$(parse_var CC_BACKEND_PORT)
@@ -162,9 +168,16 @@ fi
 # ---------------------------------------------------------------------------
 step "TLS Certificate"
 
-CERT_INFO=$(echo | timeout 5 openssl s_client \
-  -connect "${SERVER_NAME}:443" -servername "${SERVER_NAME}" 2>/dev/null \
-  | openssl x509 -noout -subject -enddate 2>/dev/null || true)
+# -servername (SNI) requires a DNS hostname; skip it when SERVER_NAME is an IP
+if [[ "${SERVER_NAME}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  CERT_INFO=$(echo Q | timeout 5 openssl s_client \
+    -connect "${SERVER_NAME}:443" 2>/dev/null \
+    | openssl x509 -noout -subject -enddate 2>/dev/null || true)
+else
+  CERT_INFO=$(echo Q | timeout 5 openssl s_client \
+    -connect "${SERVER_NAME}:443" -servername "${SERVER_NAME}" 2>/dev/null \
+    | openssl x509 -noout -subject -enddate 2>/dev/null || true)
+fi
 
 if [[ -z "${CERT_INFO}" ]]; then
   warn "Could not retrieve TLS certificate from ${SERVER_NAME}:443"
@@ -212,6 +225,16 @@ if [[ "${PG_STATUS}" == "healthy" ]]; then
     pass "ENRS database (fs_enrs): ${ENRS_TABLES} tables"
   else
     fail "ENRS database: ${ENRS_TABLES} tables (expected >10) — check enrs-backend logs"
+  fi
+
+  CC_ADMIN=$(${COMPOSE} exec -T postgres \
+    psql -U "${POSTGRES_ADMIN_USER}" -d "${CC_DB_NAME}" -t -c \
+    "SELECT COUNT(*) FROM users WHERE username='admin';" \
+    2>/dev/null | tr -d ' \n' || echo "0")
+  if [[ "${CC_ADMIN}" =~ ^[1-9] ]]; then
+    pass "CC admin user: present"
+  else
+    fail "CC admin user: missing — run: bash deploy/scripts/post-install.sh"
   fi
 else
   fail "PostgreSQL not healthy"

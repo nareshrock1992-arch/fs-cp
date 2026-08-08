@@ -44,7 +44,13 @@ ENV_FILE="${DEPLOY_DIR}/.env"
 # docker-compose.yml without needing --project-directory on every call.
 cd "${DEPLOY_DIR}"
 
-parse_var() { grep -E "^${1}=" "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '"'"'"' '; }
+parse_var() {
+  grep -E "^${1}=" "${ENV_FILE}" \
+    | head -1 \
+    | cut -d= -f2- \
+    | sed -E 's/[[:space:]]+#.*$//' \
+    | tr -d '"'"'"
+}
 
 SERVER_NAME=$(parse_var SERVER_NAME)
 CC_BACKEND_PORT=$(parse_var CC_BACKEND_PORT)
@@ -56,6 +62,26 @@ CC_DB_NAME="${CC_DB_NAME:-fs_cc}"
 ENRS_DB_NAME=$(parse_var ENRS_DB_NAME)
 ENRS_DB_NAME="${ENRS_DB_NAME:-fs_enrs}"
 SEED_EMAIL=$(parse_var SEED_ADMIN_EMAIL)
+CC_ADMIN_PASSWORD=$(parse_var CC_ADMIN_PASSWORD)
+CC_ADMIN_PASSWORD="${CC_ADMIN_PASSWORD:-admin123}"
+CC_API_BASE=$(parse_var CC_API_BASE)
+ENRS_API_BASE=$(parse_var ENRS_API_BASE)
+
+# ---------------------------------------------------------------------------
+# Validate frontend routing variables — missing values cause API 404s
+# ---------------------------------------------------------------------------
+if [[ -z "${CC_API_BASE}" ]]; then
+  warn "CC_API_BASE is not set in ${ENV_FILE}"
+  warn "  CC and Agent Desktop will return 404 on all API calls until this is fixed."
+  warn "  Add to .env:  CC_API_BASE=/cc/api"
+  warn "  Then rebuild: docker compose build cc-frontend agent-desktop && docker compose up -d"
+fi
+if [[ -z "${ENRS_API_BASE}" ]]; then
+  warn "ENRS_API_BASE is not set in ${ENV_FILE}"
+  warn "  ENRS will return 404 on all API calls until this is fixed."
+  warn "  Add to .env:  ENRS_API_BASE=/enrs/api/v1"
+  warn "  Then rebuild: docker compose build enrs-frontend && docker compose up -d"
+fi
 
 # Detect compose command (v2 plugin vs standalone)
 COMPOSE="docker compose"
@@ -145,6 +171,23 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# Step 2b: Seed CC initial user accounts
+#
+# seedUsers.js uses ON CONFLICT DO NOTHING — safe to re-run; existing
+# accounts (with changed passwords) are never overwritten.
+# CC_ADMIN_PASSWORD is passed as an env var so the admin password is
+# configurable without modifying the script.
+# ---------------------------------------------------------------------------
+step "Contact Center initial users"
+
+info "Seeding CC admin and supervisor accounts (existing accounts unchanged) ..."
+${COMPOSE} exec -T \
+  -e CC_ADMIN_PASSWORD="${CC_ADMIN_PASSWORD}" \
+  cc-backend node /app/scripts/seedUsers.js \
+  && success "CC accounts ready" \
+  || die "CC user seeding failed.\n       Diagnose with: docker compose logs cc-backend"
+
+# ---------------------------------------------------------------------------
 # Step 3: Wait for ENRS backend
 #
 # The ENRS backend runs migrations automatically in docker-entrypoint.sh
@@ -208,7 +251,12 @@ echo "  ────────────────────────
 echo "  Email:    ${SEED_EMAIL}"
 echo "  Password: (as set in SEED_ADMIN_PASSWORD in .env)"
 echo ""
-warn "Change the ENRS admin password immediately after first login."
+echo -e "${BOLD}  CC Admin Login${NC}"
+echo "  ─────────────────────────────────────────────"
+echo "  Username: admin"
+echo "  Password: (as set in CC_ADMIN_PASSWORD in .env)"
+echo ""
+warn "Change all default passwords immediately after first login."
 echo ""
 info "Run full verification:"
 info "  bash deploy/scripts/verify-install.sh"

@@ -41,7 +41,13 @@ ENV_FILE="${DEPLOY_DIR}/.env"
 
 [[ -f "${ENV_FILE}" ]] || die "${ENV_FILE} not found.\n       Run: cp ${DEPLOY_DIR}/.env.example ${ENV_FILE} && nano ${ENV_FILE}"
 
-parse_var() { grep -E "^${1}=" "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '"'"'"' '; }
+parse_var() {
+  grep -E "^${1}=" "${ENV_FILE}" \
+    | head -1 \
+    | cut -d= -f2- \
+    | sed -E 's/[[:space:]]+#.*$//' \
+    | tr -d '"'"'"
+}
 
 # ---------------------------------------------------------------------------
 # Load FS_* paths

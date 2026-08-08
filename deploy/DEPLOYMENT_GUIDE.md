@@ -99,6 +99,7 @@ openssl rand -base64 24
 | `JWT_REFRESH_SECRET` | `openssl rand -hex 32` — must differ from `JWT_ACCESS_SECRET` |
 | `INTERNAL_API_KEY` | `openssl rand -hex 32` |
 | `SEED_ADMIN_PASSWORD` | Strong password for ENRS admin |
+| `CC_ADMIN_PASSWORD` | Password for the CC `admin` account (set before first run; default `admin123`) |
 | All `FS_*` paths | Must match your FreeSWITCH installation |
 
 **Find your FreeSWITCH paths:**
@@ -168,11 +169,25 @@ Generates a self-signed certificate for `SERVER_NAME` into `deploy/ssl/`. Requir
 
 ### Step 8 — Start the stack
 
+> All remaining steps in this guide assume your working directory is `/opt/omni/deploy`.
+
 ```bash
 cd /opt/omni/deploy
 docker compose build
 docker compose up -d
 ```
+##############################
+Toload the docker images 
+
+docker load -i omni-nginx.tar
+docker load -i omni-enrs-backend.tar
+docker load -i omni-cc-backend.tar
+docker load -i omni-cc-frontend.tar
+docker load -i omni-enrs-frontend.tar
+docker load -i omni-agent-desktop.tar
+docker load -i postgres.tar
+docker load -i redis.tar
+
 
 Wait for all containers to be healthy. On a fresh install, the ENRS backend runs database migrations before starting — this takes 1–3 minutes. Subsequent starts (existing database) complete in under 30 seconds.
 
@@ -196,19 +211,33 @@ docker compose logs <service-name>
 ### Step 9 — Run post-install
 
 ```bash
-bash deploy/scripts/post-install.sh
+bash scripts/post-install.sh
 ```
 
-Runs the Contact Center database migration (`node db/init.js`) and verifies ENRS auto-migration.
+This single command:
+1. Waits for all backends to be healthy
+2. Runs the CC database migration — **skipped automatically if schema already exists**
+3. Seeds the CC initial user accounts (existing accounts are **never overwritten**)
+4. Verifies ENRS auto-migration completed
+5. Prints access URLs and credential reminders
 
-> **Run once only.** The CC migration cannot be repeated without dropping the database. If it fails, check `docker compose logs cc-backend`.
+> The script is safe to re-run. All steps check state before acting.
+
+**CC accounts created on first run:**
+
+| Username | Password | Role |
+|----------|----------|------|
+| `admin` | value of `CC_ADMIN_PASSWORD` in `.env` (default: `admin123`) | Admin |
+| `supervisor` | `super123` | Supervisor |
+
+> Change these passwords immediately after first login.
 
 ---
 
 ### Step 10 — Run verification
 
 ```bash
-bash deploy/scripts/verify-install.sh
+bash scripts/verify-install.sh
 ```
 
 Checks all components. All items should show `PASS`. Address any `FAIL` items before proceeding.
@@ -225,9 +254,13 @@ Open these URLs in a browser. Accept the self-signed certificate warning (Phase 
 | Agent Desktop | `https://<SERVER_NAME>/agent/` |
 | ENRS | `https://<SERVER_NAME>/enrs/` |
 
-ENRS admin credentials: `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from `deploy/.env`.
+**ENRS admin credentials:** `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from `deploy/.env`.
 
-**Change the ENRS admin password immediately after first login.**
+**CC admin credentials:** `admin` / `CC_ADMIN_PASSWORD` from `deploy/.env` (default: `admin123`).
+
+**Change all default passwords immediately after first login.**
+
+> `CC_ADMIN_PASSWORD` in `.env` is only used when creating the account on first run. To change the CC admin password after that, use the CC application's user management interface — editing `.env` has no effect on existing accounts.
 
 ---
 
@@ -411,7 +444,7 @@ ufw enable
 
 | Item | Detail |
 |------|--------|
-| CC migration is once-only | `node db/init.js` cannot be re-run without dropping the DB |
+| CC migration | `post-install.sh` checks DB state first — skips migration if schema already exists; safe to re-run |
 | ENRS request logging | Every request logged to stdout — hardcoded in `server.js` |
 | Redis eviction | `allkeys-lru` can evict ENRS rate-limit counters under pressure |
 | Let's Encrypt ACME | Use `--standalone` for initial issue; `--webroot -w deploy/ssl/acme` for renewals |

@@ -34,7 +34,7 @@ ENV_FILE="${DEPLOY_DIR}/.env"
 
 [[ -f "${ENV_FILE}" ]] || die "${ENV_FILE} not found.\n       Run: cp ${DEPLOY_DIR}/.env.example ${ENV_FILE} && nano ${ENV_FILE}"
 
-SERVER_NAME=$(grep -E '^SERVER_NAME=' "${ENV_FILE}" | head -1 | cut -d= -f2- | tr -d '"'"'"' ')
+SERVER_NAME=$(grep -E '^SERVER_NAME=' "${ENV_FILE}" | head -1 | cut -d= -f2- | sed -E 's/[[:space:]]+#.*$//' | tr -d '"'"'")
 [[ -n "${SERVER_NAME}" ]] || die "SERVER_NAME is not set in ${ENV_FILE}"
 
 SSL_DIR="${DEPLOY_DIR}/ssl"
