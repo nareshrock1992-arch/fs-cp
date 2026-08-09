@@ -6,10 +6,6 @@ import { emitInternal } from '../../services/socketService.js';
 import { createCampaign, createCampaignByConfigId } from '../../services/campaignEngine.js';
 import { logger } from '../../infrastructure/index.js';
 
-// ── TEMPORARY DEBUG helper — remove after ENS blast investigation ─────────────
-const D = (tag, data, msg) => logger.info({ module: 'ENS_DEBUG', tag, ...data }, `[ENS_DEBUG] ${msg}`);
-// ─────────────────────────────────────────────────────────────────────────────
-
 // ── Validators ────────────────────────────────────────────────────────────────
 
 const PhoneRegex = /^[0-9+\-\s()]{7,20}$/;
@@ -19,7 +15,7 @@ function validatePhone(n) {
 }
 
 const DeliverySchema = z.object({
-  contact_number: z.string().min(7).max(20),
+  contact_number: z.string().min(1).max(20),
   status:         z.enum(['ANSWERED', 'NO_ANSWER', 'FAILED', 'CANCELLED']),
   call_uuid:      z.string().optional().nullable(),
   hangup_cause:   z.string().optional().nullable(),
@@ -32,13 +28,13 @@ const DeliverySchema = z.object({
 export const NotificationCreateSchema = z.object({
   configuration_id: z.number().int().positive(),
   triggered_via:    z.enum(['PHONE', 'UI', 'API']).default('PHONE'),
-  caller_number:    z.string().min(7).max(20).optional().nullable(),
+  caller_number:    z.string().min(1).max(20).optional().nullable(),
   recording_file:   z.string().max(512).optional().nullable(),
 });
 
 const CallbackLogSchema = z.object({
   notification_uuid: z.string().uuid(),
-  caller_number:     z.string().min(7).max(20),
+  caller_number:     z.string().min(1).max(20),
   reply_clid:        z.string().min(1).max(32),
   delivery_id:       z.number().int().positive(),
   replayed_at:       z.string().datetime({ offset: true }).optional().nullable(),
@@ -215,16 +211,34 @@ export const startCampaign = asyncHandler(async (req, res) => {
 // this endpoint skips the trigger_number → config lookup and goes straight to
 // createCampaignByConfigId(), which creates the ens_campaigns row the campaign
 // engine polls every tick.
+//
+// F-09 SECURITY NOTE — why tenant validation is intentionally omitted here:
+//
+//  1. This route is protected by INTERNAL_API_KEY (internalAuth middleware).
+//     No JWT-authenticated user can reach it; only FreeSWITCH can.
+//
+//  2. The configuration_id this endpoint receives is embedded in a published
+//     IVR flow.  At publish time, ivrGraphValidator validates every ENS node's
+//     configuration_id against the IVR flow's own tenant_id
+//     (ivrGraphValidator.js — `WHERE id = ANY($1) AND tenant_id = $2`).
+//     A cross-tenant configuration_id cannot survive IVR flow publication.
+//
+//  3. The Lua executor has no access to a user JWT and therefore cannot supply
+//     a tenant_id that would be meaningful for tenant-scoped lookup.  Inventing
+//     one would require IVR-flow-to-tenant mapping changes in Lua and the
+//     internal API contract — a larger change than the risk warrants.
+//
+//  4. The remaining residual risk (compromised INTERNAL_API_KEY) is the same
+//     for all internal endpoints and is mitigated operationally (key rotation,
+//     firewall rules, nginx deny on WAN).
+//
+// Do NOT add a tenantId guard here without verifying that the IVR executor
+// can supply a reliable tenant context and that the Lua contract is updated.
 export const startCampaignByConfig = asyncHandler(async (req, res) => {
-  D('PHASE3_CAMPAIGN_ENDPOINT', {}, '✅ CAMPAIGN PATH HIT — POST /ens/campaign/start-by-config');
-  D('PHASE3_RAW_BODY', { body: req.body }, 'Raw request body');
-
   const configId = parseInt(req.body.configuration_id, 10);
   if (!configId || configId <= 0) {
-    D('PHASE3_VALIDATION', { configuration_id: req.body.configuration_id }, 'FAIL — configuration_id missing or invalid');
     return res.status(400).json({ success: false, error: 'configuration_id required' });
   }
-  D('PHASE3_VALIDATION', { configId, recording_file: req.body.recording_file || null }, 'PASS — payload valid');
 
   let campaign;
   try {
@@ -236,17 +250,8 @@ export const startCampaignByConfig = asyncHandler(async (req, res) => {
       messageText:   null,
     });
   } catch (err) {
-    D('PHASE3_CAMPAIGN_CREATE', { configId, status: err.status, message: err.message }, `FAIL — createCampaignByConfigId threw: ${err.message}`);
     throw err; // let asyncHandler/errorHandler handle it
   }
-
-  D('PHASE3_CAMPAIGN_CREATE', {
-    campaign_id:        campaign.id,
-    status:             campaign.status,
-    total_destinations: campaign.total_destinations,
-    recording_file:     campaign.recording_file,
-    sip_gateway:        campaign.sip_gateway,
-  }, `✅ Campaign created — id=${campaign.id} destinations=${campaign.total_destinations} status=${campaign.status}`);
 
   res.status(201).json({
     success:            true,
@@ -365,9 +370,7 @@ export const ensQueueStatus = asyncHandler(async (req, res) => {
 
 // POST /api/v1/internal/ens/notifications
 export const ensCreateNotification = asyncHandler(async (req, res) => {
-  D('PHASE2_LEGACY_ENDPOINT', {}, '❌ LEGACY PATH HIT — POST /ens/notifications — no campaign will be created');
   const d = NotificationCreateSchema.parse(req.body);
-  D('PHASE2_VALIDATED_PAYLOAD', { configuration_id: d.configuration_id, triggered_via: d.triggered_via, recording_file: d.recording_file }, 'Legacy payload validated');
 
   // Verify config exists
   const { rows: [cfg] } = await query(
@@ -376,13 +379,10 @@ export const ensCreateNotification = asyncHandler(async (req, res) => {
     [d.configuration_id]
   );
   if (!cfg) {
-    D('PHASE2_CONFIG_LOOKUP', { configuration_id: d.configuration_id }, 'FAIL — ens_configurations row not found or inactive');
     return res.status(404).json({ error: 'ENS configuration not found' });
   }
-  D('PHASE2_CONFIG_LOOKUP', { configuration_id: d.configuration_id }, 'PASS — config found');
 
   const contacts = await resolveEnsContacts(d.configuration_id);
-  D('PHASE2_CONTACTS', { count: contacts.length, contacts }, `Contact resolution — ${contacts.length} contact(s)`);
   const notifUuid = uuidv4();
 
   const { rows: [notif] } = await withTransaction(async (tq) => {
@@ -420,8 +420,6 @@ export const ensCreateNotification = asyncHandler(async (req, res) => {
     total_targets:     contacts.length,
   });
 
-  D('PHASE2_RESPONSE', { notification_uuid: notif.notification_uuid, notification_id: notif.id },
-    '❌ Legacy response sent — ens_notifications row created, ens_campaigns NOT created — engine will not pick this up');
   res.status(201).json({
     notification_uuid: notif.notification_uuid,
     notification_id:   notif.id,
