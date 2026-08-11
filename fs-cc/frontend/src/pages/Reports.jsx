@@ -8,6 +8,7 @@ import {
 import { Reports as ReportsApi } from '../api/client.js';
 import Panel from '../components/Panel.jsx';
 import CDRTable from '../components/reports/CDRTable.jsx';
+import AgentSessionsTab from '../components/reports/AgentSessionsTab.jsx';
 import { inputClass, buttonPrimary } from '../components/form.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -42,11 +43,12 @@ function useIsDark() {
 // ── Tab bar ───────────────────────────────────────────────────────────────────
 
 const TABS = [
-  { id: 'volume',  label: 'Volume Trend' },
-  { id: 'queues',  label: 'Queue Performance' },
-  { id: 'agents',  label: 'Agent Performance' },
-  { id: 'ivr',     label: 'IVR Paths' },
-  { id: 'cdr',     label: 'CDR Report' },
+  { id: 'volume',    label: 'Volume Trend' },
+  { id: 'queues',    label: 'Queue Performance' },
+  { id: 'agents',    label: 'Agent Performance' },
+  { id: 'ivr',       label: 'IVR Paths' },
+  { id: 'cdr',       label: 'CDR Report' },
+  { id: 'sessions',  label: 'Agent Sessions' },
 ];
 
 function TabBar({ active, onChange }) {
@@ -398,6 +400,9 @@ export default function Reports() {
 
       {/* ── CDR Report ────────────────────────────────────────────────────── */}
       {tab === 'cdr' && <CDRTable from={from} to={to} />}
+
+      {/* ── Agent Sessions (Phase 2) ──────────────────────────────────────── */}
+      {tab === 'sessions' && <AgentSessionsTab from={from} to={to} />}
 
     </div>
   );

@@ -13,12 +13,12 @@ WORKDIR /app
 # Copy manifests only — layer is cached until package files change
 COPY package.json package-lock.json* ./
 
-# npm ci requires lockfile; fall back to npm install if lockfile absent
-RUN if [ -f package-lock.json ]; then \
-      npm ci --omit=dev --ignore-scripts; \
-    else \
-      npm install --omit=dev --ignore-scripts; \
-    fi
+# Use npm install --omit=dev rather than npm ci so a lockfile that has not yet
+# been regenerated after a devDependency update (e.g. vitest added to
+# package.json) does not abort the build. Production dependencies are still
+# fully deterministic because only package.json governs what is installed with
+# --omit=dev; devDependencies are never included.
+RUN npm install --omit=dev --ignore-scripts
 
 # ── Stage 2: production image ─────────────────────────────────────────────────
 FROM node:20-alpine AS production

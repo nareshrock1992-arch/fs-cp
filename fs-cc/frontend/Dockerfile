@@ -10,16 +10,6 @@
 FROM node:20-alpine AS build
 WORKDIR /app
 
-# Build-time configuration.
-# These are intentionally ARGs (not ENV) so they are baked into the static
-# bundle at build time. They cannot be changed at runtime — the image must be
-# rebuilt if these values change.
-#
-# VITE_BASE_PATH  — Vite's --base option. Sets import.meta.env.BASE_URL which
-#                   BrowserRouter uses as its basename. Must end with "/".
-# VITE_SOCKET_PATH — Path the Socket.IO client sends the upgrade request to.
-#                    Must match the SOCKET_PATH env on the cc-backend container
-#                    and the nginx location block.
 # VITE_BASE_PATH   — Vite --base: sets import.meta.env.BASE_URL; used by BrowserRouter basename
 #                    and for static asset URL generation (JS/CSS hrefs in index.html).
 # VITE_API_URL     — API base the browser sends requests to. In prod this must include the
@@ -56,10 +46,8 @@ RUN npm run build -- --base ${VITE_BASE_PATH}
 # ── Stage 2: static file server ───────────────────────────────────────────────
 FROM nginx:1.27-alpine AS serve
 
-# Remove the default nginx config — the production config is mounted / copied
 COPY nginx.prod.conf /etc/nginx/conf.d/default.conf
 
-# Static bundle from the build stage
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80

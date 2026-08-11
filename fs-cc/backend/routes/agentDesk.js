@@ -15,5 +15,6 @@ router.post('/status',     asyncHandler(desk.agentSetStatus));
 router.get('/queues',      asyncHandler(desk.agentQueues));
 router.get('/calls',       asyncHandler(desk.agentCalls));
 router.get('/performance', asyncHandler(desk.agentPerformance));
+router.get('/esl-status',  asyncHandler(desk.eslStatus));
 
 export default router;

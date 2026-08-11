@@ -92,4 +92,11 @@ export const Reports = {
     const params = new URLSearchParams({ type, format, from, to });
     return `${API_URL}/reports/export?${params}`;
   },
+
+  // ── Phase 2: agent session + activity endpoints ────────────────────────────
+  agentSessions:       (params)          => api.get('/reports/agent-sessions',                  { params }).then(r => r.data),
+  agentSessionsList:   (agentId, params) => api.get(`/reports/agent-sessions/${agentId}`,       { params }).then(r => r.data),
+  agentActivity:       (params)          => api.get('/reports/agent-activity',                   { params }).then(r => r.data),
+  agentActivityDetail: (agentId, params) => api.get(`/reports/agent-activity/${agentId}`,       { params }).then(r => r.data),
+  agentStateEvents:    (agentId, params) => api.get(`/reports/agent-state-events/${agentId}`,   { params }).then(r => r.data),
 };

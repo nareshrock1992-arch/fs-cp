@@ -92,6 +92,18 @@ export default function Dashboard({ auth, theme }) {
 
   // ── Socket.IO real-time events ────────────────────────────────────────────
   useEffect(() => {
+    // Re-sync ESL status on every socket connect/reconnect.
+    // The backend emits esl:status immediately on connection (socketService.js),
+    // but that event can be missed if the Socket.IO transport drops during the
+    // FreeSWITCH restart window. This REST call guarantees the UI reflects the
+    // authoritative backend state regardless of event delivery timing.
+    const onConnect = async () => {
+      try {
+        const { connected } = await api.eslStatus();
+        setEslConn(connected);
+      } catch { /* ignore — esl:status socket event is the primary path */ }
+    };
+
     const onEslStatus   = ({ connected }) => setEslConn(connected);
     const onQueueUpdate = () => fetchQueues();
     const onHangup      = () => fetchCalls();
@@ -136,6 +148,12 @@ export default function Dashboard({ auth, theme }) {
       updateAgent({ status, state });
     };
 
+    socket.on('connect',         onConnect);
+    // If socket is already connected when this effect runs (e.g. initial mount
+    // after the connection was established), fetch current status immediately —
+    // the server's connect-time esl:status emit may have arrived before this
+    // listener was registered.
+    if (socket.connected) onConnect();
     socket.on('esl:status',      onEslStatus);
     socket.on('agent:offering',  onAgentOffering);
     socket.on('call:bridged',    onCallBridged);
@@ -148,6 +166,7 @@ export default function Dashboard({ auth, theme }) {
     socket.on('call:abandoned',  onQueueUpdate);
 
     return () => {
+      socket.off('connect',         onConnect);
       socket.off('esl:status',      onEslStatus);
       socket.off('agent:offering',  onAgentOffering);
       socket.off('call:bridged',    onCallBridged);

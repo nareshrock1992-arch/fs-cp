@@ -24,4 +24,5 @@ export const api = {
   queues:      ()              => request('GET',  '/agent-desk/queues'),
   calls:       ()              => request('GET',  '/agent-desk/calls'),
   performance: ()              => request('GET',  '/agent-desk/performance'),
+  eslStatus:   ()              => request('GET',  '/agent-desk/esl-status'),
 };

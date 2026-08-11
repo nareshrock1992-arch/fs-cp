@@ -2,6 +2,7 @@ import esl from 'modesl';
 import { EventEmitter } from 'events';
 import { config } from '../config/index.js';
 import { query } from '../db/pool.js';
+import * as agentSession from './agentSessionService.js';
 
 const { host: FS_ESL_HOST, port: FS_ESL_PORT,
         password: FS_ESL_PASSWORD, reconnectMs: RECONNECT_MS } = config.esl;
@@ -12,10 +13,27 @@ ccEvents.setMaxListeners(30);
 // Namespace object so reaperCycle can cancel a previous interval on reconnect
 const eslService = { _reaperTimer: null };
 
-let conn      = null;
-let connected = false;
+let conn         = null;
+let connected    = false;
+let reconnecting = false;  // guard: prevents duplicate retry loops
 
 export function isConnected() { return connected; }
+
+// Schedule a single reconnect attempt. The `reconnecting` flag ensures
+// that concurrent triggers (esl::end + error on the same conn, or a
+// stale old conn firing after we already replaced it) only produce one
+// pending reconnect, not a storm.
+let _reconnectAttempts = 0;
+function scheduleReconnect() {
+  if (reconnecting) return;
+  reconnecting = true;
+  _reconnectAttempts++;
+  console.warn(`[ESL] Reconnect attempt ${_reconnectAttempts} in ${RECONNECT_MS} ms …`);
+  setTimeout(() => {
+    reconnecting = false;
+    connectESL();
+  }, RECONNECT_MS);
+}
 
 // IVR steps buffer: chanUuid → [{ts,step,...}]
 // Holds steps for callers in the IVR dialplan before they enter a queue.
@@ -57,9 +75,11 @@ async function waitForModCallcenter(maxWaitMs = 45_000) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function connectESL() {
+  console.log(`[ESL] Connecting to FreeSWITCH at ${FS_ESL_HOST}:${FS_ESL_PORT} …`);
   conn = new esl.Connection(FS_ESL_HOST, FS_ESL_PORT, FS_ESL_PASSWORD, async () => {
     connected = true;
-    console.log(`[esl] ✓ connected to FreeSWITCH at ${FS_ESL_HOST}:${FS_ESL_PORT}`);
+    _reconnectAttempts = 0;  // reset counter on successful connect
+    console.log(`[ESL] Connected to FreeSWITCH at ${FS_ESL_HOST}:${FS_ESL_PORT}`);
     ccEvents.emit('esl:status', { connected: true });
 
     // CRITICAL: CUSTOM must come AFTER plain event names.
@@ -71,17 +91,30 @@ export function connectESL() {
     // mod_callcenter to be ready before pushing DB state.
     await delay(500);
     runStartupSequence().catch(e =>
-      console.error('[esl] startup sequence error:', e.message)
+      console.error('[ESL] Startup sequence error:', e.message)
     );
   });
 
-  conn.on('error', err => console.error('[esl] connection error:', err.message || err));
+  // TCP-level error (e.g. ECONNREFUSED while FreeSWITCH is booting).
+  // Without this retry, the reconnect loop dies after the first failed attempt.
+  conn.on('error', err => {
+    console.error('[ESL] Connection error:', err.message || err);
+    if (connected) {
+      // Treat a mid-session error as a disconnect
+      connected = false;
+      ccEvents.emit('esl:status', { connected: false });
+      console.warn('[ESL] Marked OFFLINE');
+    }
+    scheduleReconnect();
+  });
 
   conn.on('esl::end', () => {
-    connected = false;
-    ccEvents.emit('esl:status', { connected: false });
-    console.warn(`[esl] disconnected – retrying in ${RECONNECT_MS} ms`);
-    setTimeout(connectESL, RECONNECT_MS);
+    if (connected) {
+      connected = false;
+      ccEvents.emit('esl:status', { connected: false });
+      console.warn('[ESL] Connection lost — Marked OFFLINE');
+    }
+    scheduleReconnect();
   });
 
   conn.on('esl::event::CUSTOM::*',                 evt => handleCallcenterEvent(evt));
@@ -548,6 +581,18 @@ async function runStartupSequence() {
   try { await syncAgentStates(); }
   catch (err) { console.error('[esl] syncAgentStates failed:', err.message); }
 
+  // Reconcile open agent sessions against current FreeSWITCH state.
+  // This prevents false logouts — sessions stay open unless FS confirms logout.
+  try {
+    const agentList = await cc.agentList();
+    await agentSession.reconcileOnStartup(agentList);
+    console.log('[esl] ✓ session reconciliation complete');
+  } catch (err) {
+    // ESL may not be fully ready yet; leave sessions open rather than
+    // guessing — they will self-correct as status events arrive.
+    console.warn('[esl] session reconciliation skipped:', err.message);
+  }
+
   ccEvents.emit('agent:update', { reason: 'startup' });
   console.log('[esl] ✓ startup sequence complete');
 
@@ -555,6 +600,7 @@ async function runStartupSequence() {
   // Clear any existing interval so reconnects don't stack multiple reapers.
   if (eslService._reaperTimer) clearInterval(eslService._reaperTimer);
   eslService._reaperTimer = setInterval(reaperCycle, 30_000);
+  console.log('[ESL] Marked ONLINE');
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -644,6 +690,7 @@ async function handleCallcenterEvent(evt) {
           `INSERT INTO agent_state_log (agent_id, status, reason) VALUES ($1,$2,'fs_event')`,
           [agentId, status]
         );
+        await agentSession.handleStatusTransition(agentId, status, 'fs_event');
       } catch (err) { console.error('[esl] agent-status-change:', err.message); }
       ccEvents.emit('agent:status', { agentId, status });
       break;

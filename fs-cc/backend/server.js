@@ -8,6 +8,7 @@ import { connectESL }      from './services/eslService.js';
 import { initSocket }      from './services/socketService.js';
 import { requireAuth }     from './middleware/auth.js';
 import { warmPool }        from './db/pool.js';
+import { runMigrations }   from './db/migrationRunner.js';
 import { writeAndReloadXml, generateCallcenterXml } from './utils/queueXml.js';
 import { asyncHandler }    from './utils/asyncHandler.js';
 
@@ -67,5 +68,9 @@ initSocket(server, config.cors.origin);
 server.listen(config.port, async () => {
   console.log(`[server] ✓ listening on :${config.port}  env:${config.env}  cors:${config.cors.origin}`);
   try { await warmPool(); } catch (err) { console.error('[db] warm-up failed:', err.message); }
+  try { await runMigrations(); } catch (err) {
+    console.error('[db] migration failed — shutting down:', err.message);
+    process.exit(1);
+  }
   connectESL();
 });

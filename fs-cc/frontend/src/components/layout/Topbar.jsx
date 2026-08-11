@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { Sun, Moon, ChevronDown, ShieldCheck, LogOut, Wifi, WifiOff } from 'lucide-react';
-import { useSocketEvent } from '../../api/socket.js';
+import { socket, useSocketEvent } from '../../api/socket.js';
 import { useAuth, clearToken } from '../../hooks/useAuth.js';
 
 const TITLES = {
@@ -113,6 +113,18 @@ export default function Topbar({ isDark, toggleTheme }) {
 
   const onEslStatus = useCallback((p) => setEslConnected(Boolean(p?.connected)), []);
   useSocketEvent('esl:status', onEslStatus);
+
+  // If the socket was already connected before this component mounted (e.g.
+  // the user just logged in — socket connected on page-load while the login
+  // form was shown, so the connect-time esl:status event was missed), ask
+  // the backend to re-send the current status now that we have a listener.
+  useEffect(() => {
+    if (socket.connected) {
+      socket.emit('esl:get-status');
+    }
+    // On every subsequent (re)connect the backend already broadcasts esl:status
+    // unconditionally, so no extra work is needed for the reconnect case.
+  }, []);
 
   useEffect(() => {
     const t = setInterval(() => setNow(new Date()), 1000);

@@ -1,5 +1,6 @@
 import { query } from '../db/pool.js';
 import { cc } from '../services/eslService.js';
+import * as agentSession from '../services/agentSessionService.js';
 
 // Returns all agents with their assigned queues in a `queues` array
 export async function listAgents(req, res) {
@@ -154,6 +155,8 @@ export async function setAgentStatus(req, res) {
     `INSERT INTO agent_state_log (agent_id, status, reason) VALUES ($1,$2,'manual')`,
     [agentId, status]
   );
+  try { await agentSession.handleStatusTransition(agentId, status, 'manual'); }
+  catch (err) { console.error('[sessions] setAgentStatus transition failed:', err.message); }
   res.json({ agentId, status });
 }
 
