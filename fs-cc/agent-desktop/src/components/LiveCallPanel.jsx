@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { PhoneIncoming, PhoneCall } from 'lucide-react';
 
 function useElapsed(startedAt) {
   const [elapsed, setElapsed] = useState(0);
@@ -6,10 +7,8 @@ function useElapsed(startedAt) {
 
   useEffect(() => {
     if (!startedAt) { setElapsed(0); return; }
-
     const tick = () =>
       setElapsed(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
-
     tick();
     ref.current = setInterval(tick, 1000);
     return () => clearInterval(ref.current);
@@ -22,8 +21,8 @@ function formatDuration(sec) {
   const h = Math.floor(sec / 3600);
   const m = Math.floor((sec % 3600) / 60);
   const s = sec % 60;
-  if (h > 0) return `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
-  return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 }
 
 // callState: { phase: 'ringing'|'talking'|null, callUuid, ani, queueName, startedAt }
@@ -33,61 +32,57 @@ export default function LiveCallPanel({ callState }) {
   if (!callState || callState.phase === null) return null;
 
   const isRinging = callState.phase === 'ringing';
-  const isTalking = callState.phase === 'talking';
+
+  const borderClass = isRinging
+    ? 'border-lamp-live animate-ring-pulse'
+    : 'border-lamp-available';
+
+  const accentClass = isRinging ? 'bg-lamp-live' : 'bg-lamp-available';
+  const iconBgClass = isRinging ? 'bg-lamp-live/15' : 'bg-lamp-available/15';
+  const iconColor   = isRinging ? 'text-lamp-live' : 'text-lamp-available';
+  const labelColor  = isRinging ? 'text-lamp-live' : 'text-lamp-available';
+  const labelText   = isRinging ? 'Incoming Call' : 'In Call';
 
   return (
-    <div className={`
-      card border-2 p-4
-      ${isRinging ? 'border-lamp-live animate-pulse' : 'border-lamp-available'}
-      relative overflow-hidden
-    `}>
-      {/* accent stripe */}
-      <div className={`absolute left-0 inset-y-0 w-1 ${isRinging ? 'bg-lamp-live' : 'bg-lamp-available'}`} />
+    <div className={`card border-2 ${borderClass} relative overflow-hidden`}>
+      {/* Accent stripe */}
+      <div className={`absolute left-0 inset-y-0 w-1 ${accentClass}`} />
 
-      <div className="flex items-center gap-4 pl-3">
+      <div className="flex items-center gap-4 p-4 pl-5">
         {/* Icon */}
-        <div className={`
-          w-12 h-12 rounded-full flex items-center justify-center shrink-0
-          ${isRinging ? 'bg-lamp-live/15' : 'bg-lamp-available/15'}
-        `}>
-          {isRinging ? (
-            <svg className="w-6 h-6 text-lamp-live" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-            </svg>
-          ) : (
-            <svg className="w-6 h-6 text-lamp-available" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-                d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-            </svg>
-          )}
+        <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${iconBgClass}`}>
+          {isRinging
+            ? <PhoneIncoming size={22} className={`${iconColor} ${isRinging ? 'animate-pulse-soft' : ''}`} />
+            : <PhoneCall     size={22} className={iconColor} />}
         </div>
 
         {/* Info */}
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <span className={`text-xs font-bold uppercase tracking-wider ${isRinging ? 'text-lamp-live' : 'text-lamp-available'}`}>
-              {isRinging ? '● Incoming Call' : '● In Call'}
+          <div className="flex items-center gap-2 mb-0.5">
+            <span className={`text-[11px] font-bold uppercase tracking-wider ${labelColor}`}>
+              {labelText}
             </span>
-            {isTalking && (
+            {!isRinging && (
               <span className="font-mono text-ink tabular-nums font-semibold text-sm">
                 {formatDuration(elapsed)}
               </span>
             )}
           </div>
-          <p className="text-ink font-semibold text-lg truncate mt-0.5">
+          <p className="text-ink font-semibold text-lg truncate">
             {callState.ani || 'Unknown caller'}
           </p>
-          <p className="text-ink-dim text-sm">
-            Queue: <span className="text-brand-light">{callState.queueName || '—'}</span>
-          </p>
+          {callState.queueName && (
+            <p className="text-ink-dim text-sm">
+              Queue: <span className="text-brand-light font-medium">{callState.queueName}</span>
+            </p>
+          )}
         </div>
 
-        {/* Position / wait indicator for ringing */}
+        {/* Ringing timer */}
         {isRinging && (
           <div className="shrink-0 text-right">
             <p className="stat-label">Ringing</p>
-            <p className="font-mono text-lamp-live font-bold text-lg">{formatDuration(elapsed)}</p>
+            <p className="font-mono text-lamp-live font-bold text-xl tnum">{formatDuration(elapsed)}</p>
           </div>
         )}
       </div>

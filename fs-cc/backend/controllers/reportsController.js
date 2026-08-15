@@ -108,37 +108,107 @@ export async function agentPerformance(req, res) {
   res.json(rows);
 }
 
-// IVR path step distribution — unnests ivr_path JSONB array and counts each step label
+// ─────────────────────────────────────────────────────────────────────────────
+// IVR path distribution — returns three semantically distinct arrays:
+//
+//   dtmf   — DTMF digits pressed at any point during the call
+//             Source: calls.ivr_path, elements where digit IS NOT NULL
+//             Counted as unique calls per digit (deduplicated by call_uuid + digit)
+//
+//   queues — Calls that actually entered a FreeSWITCH queue
+//             Source: calls.queue_name IS NOT NULL  ← authoritative queue membership
+//             NOT derived from ivr_path app=callcenter (which only records
+//             the callcenter application attempt, not confirmed queue membership)
+//
+//   other  — Other FreeSWITCH application/system events from ivr_path
+//             (playback, gather_digits, menu, ivr, speak, variable_ivr_step, etc.)
+//             Counted as unique calls per step value
+//
+// All three share the same date filter and report population.
+// ─────────────────────────────────────────────────────────────────────────────
 export async function ivrPathDistribution(req, res) {
   const { from, to } = dateRange(req);
-  const { rows } = await query(
+
+  // ── DTMF: unique calls per digit pressed ─────────────────────────────────
+  // Deduplicate at (call_uuid, digit) level: a call where "1" is pressed
+  // three times counts as one call for digit "1", not three events.
+  const dtmfRows = await query(
     `SELECT
-       step_obj->>'step' AS ivr_option,
-       COUNT(*)::INT     AS calls
-     FROM calls,
-          jsonb_array_elements(ivr_path) AS step_obj
-     WHERE start_time BETWEEN $1 AND $2
-       AND jsonb_array_length(ivr_path) > 0
-     GROUP BY step_obj->>'step'
-     ORDER BY calls DESC
-     LIMIT 50`,
+       digit_val                        AS digit,
+       COUNT(DISTINCT call_uuid)::INT   AS calls
+     FROM (
+       SELECT
+         c.call_uuid,
+         step_obj->>'digit' AS digit_val
+       FROM calls c,
+            jsonb_array_elements(c.ivr_path) AS step_obj
+       WHERE c.start_time BETWEEN $1 AND $2
+         AND jsonb_array_length(c.ivr_path) > 0
+         AND (step_obj->>'digit') IS NOT NULL
+         AND (step_obj->>'digit') <> ''
+     ) sub
+     GROUP BY digit_val
+     ORDER BY calls DESC`,
     [from, to]
   );
 
-  // Fallback to legacy ivr_option column if JSONB has no data yet
-  if (rows.length === 0) {
-    const legacy = await query(
-      `SELECT COALESCE(ivr_option, 'unknown') AS ivr_option, COUNT(*)::INT AS calls
-       FROM calls
-       WHERE start_time BETWEEN $1 AND $2
-       GROUP BY ivr_option
-       ORDER BY calls DESC`,
-      [from, to]
-    );
-    return res.json(legacy.rows);
+  // ── Queue destinations: calls that actually became queue members ──────────
+  // calls.queue_name is set only by the member-queue-start callcenter::info
+  // event — confirmed queue membership, not merely a callcenter app attempt.
+  // split_part strips the @context suffix (e.g. "Support@default" → "Support")
+  // to match how queue names are displayed in Queue Performance and CDR.
+  const queueRows = await query(
+    `SELECT
+       split_part(queue_name, '@', 1) AS queue,
+       COUNT(*)::INT                  AS calls
+     FROM calls
+     WHERE start_time BETWEEN $1 AND $2
+       AND queue_name IS NOT NULL
+     GROUP BY split_part(queue_name, '@', 1)
+     ORDER BY calls DESC`,
+    [from, to]
+  );
+
+  // ── Other system events: non-DTMF, non-callcenter ivr_path steps ─────────
+  // Includes: playback, gather_digits, menu, ivr, speak, phrase,
+  // variable_ivr_step values, and any other application events.
+  // Unknown/malformed elements (no digit AND no app or unknown app) also
+  // fall here — nothing is silently discarded.
+  const otherRows = await query(
+    `SELECT
+       step_val                         AS step,
+       COUNT(DISTINCT call_uuid)::INT   AS calls
+     FROM (
+       SELECT
+         c.call_uuid,
+         COALESCE(step_obj->>'step', '(unknown)') AS step_val
+       FROM calls c,
+            jsonb_array_elements(c.ivr_path) AS step_obj
+       WHERE c.start_time BETWEEN $1 AND $2
+         AND jsonb_array_length(c.ivr_path) > 0
+         AND (step_obj->>'digit') IS NULL
+         AND COALESCE(step_obj->>'app', '') <> 'callcenter'
+     ) sub
+     GROUP BY step_val
+     ORDER BY calls DESC`,
+    [from, to]
+  );
+
+  // ── Compute share % within each section independently ────────────────────
+  function withShare(rows, key) {
+    const total = rows.reduce((s, r) => s + Number(r.calls), 0);
+    return rows.map(r => ({
+      ...r,
+      calls: Number(r.calls),
+      share: total > 0 ? Math.round((Number(r.calls) / total) * 100) : 0,
+    }));
   }
 
-  res.json(rows);
+  res.json({
+    dtmf:   withShare(dtmfRows.rows,  'digit'),
+    queues: withShare(queueRows.rows, 'queue'),
+    other:  withShare(otherRows.rows, 'step'),
+  });
 }
 
 export async function callVolumeByDay(req, res) {
@@ -223,15 +293,45 @@ export async function exportReport(req, res) {
     columns = ['day','offered','answered','abandoned'];
 
   } else if (type === 'ivr-paths') {
-    const r = await query(
-      `SELECT step_obj->>'step' AS step, COUNT(*)::INT AS count
-       FROM calls, jsonb_array_elements(ivr_path) AS step_obj
-       WHERE start_time BETWEEN $1 AND $2
-       GROUP BY step ORDER BY count DESC`,
-      [from, to]
-    );
-    rows = r.rows;
-    columns = ['step','count'];
+    // Three typed sections: dtmf | queue | other — same logic as ivrPathDistribution()
+    const [dtmf, queues, other] = await Promise.all([
+      query(
+        `SELECT 'dtmf' AS type, digit_val AS label, COUNT(DISTINCT call_uuid)::INT AS calls
+         FROM (
+           SELECT c.call_uuid, step_obj->>'digit' AS digit_val
+           FROM calls c, jsonb_array_elements(c.ivr_path) AS step_obj
+           WHERE c.start_time BETWEEN $1 AND $2
+             AND jsonb_array_length(c.ivr_path) > 0
+             AND (step_obj->>'digit') IS NOT NULL
+             AND (step_obj->>'digit') <> ''
+         ) sub
+         GROUP BY digit_val ORDER BY calls DESC`,
+        [from, to]
+      ),
+      query(
+        `SELECT 'queue' AS type, split_part(queue_name,'@',1) AS label, COUNT(*)::INT AS calls
+         FROM calls
+         WHERE start_time BETWEEN $1 AND $2
+           AND queue_name IS NOT NULL
+         GROUP BY split_part(queue_name,'@',1) ORDER BY calls DESC`,
+        [from, to]
+      ),
+      query(
+        `SELECT 'other' AS type, step_val AS label, COUNT(DISTINCT call_uuid)::INT AS calls
+         FROM (
+           SELECT c.call_uuid, COALESCE(step_obj->>'step','(unknown)') AS step_val
+           FROM calls c, jsonb_array_elements(c.ivr_path) AS step_obj
+           WHERE c.start_time BETWEEN $1 AND $2
+             AND jsonb_array_length(c.ivr_path) > 0
+             AND (step_obj->>'digit') IS NULL
+             AND COALESCE(step_obj->>'app','') <> 'callcenter'
+         ) sub
+         GROUP BY step_val ORDER BY calls DESC`,
+        [from, to]
+      ),
+    ]);
+    rows    = [...dtmf.rows, ...queues.rows, ...other.rows];
+    columns = ['type', 'label', 'calls'];
 
   } else {
     return res.status(400).json({ error: 'Invalid report type' });

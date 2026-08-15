@@ -1,3 +1,5 @@
+import { Phone, PhoneMissed, Clock, Timer } from 'lucide-react';
+
 function fmt(sec) {
   if (!sec) return '0s';
   if (sec < 60)  return `${sec}s`;
@@ -19,7 +21,11 @@ export default function PerformanceCard({ perf, loading }) {
     return (
       <div className="card p-4">
         <p className="stat-label mb-3">My Performance Today</p>
-        <p className="text-ink-faint text-sm">Loading…</p>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          {[...Array(4)].map((_, i) => (
+            <div key={i} className="bg-panel-raised rounded-lg p-2.5 animate-pulse h-14" />
+          ))}
+        </div>
       </div>
     );
   }
@@ -34,30 +40,36 @@ export default function PerformanceCard({ perf, loading }) {
     <div className="card p-4">
       <p className="stat-label mb-3">My Performance Today</p>
 
-      {/* KPI grid */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         <KpiTile
-          label="Calls Handled"
+          label="Handled"
           value={perf.calls_handled ?? 0}
           color={perf.calls_handled > 0 ? 'text-lamp-available' : 'text-ink-dim'}
+          Icon={Phone}
+          iconColor={perf.calls_handled > 0 ? 'text-lamp-available' : 'text-ink-faint'}
         />
         <KpiTile
-          label="Calls Missed"
+          label="Missed"
           value={perf.calls_missed ?? 0}
           color={perf.calls_missed > 0 ? 'text-lamp-alert' : 'text-ink-dim'}
+          Icon={PhoneMissed}
+          iconColor={perf.calls_missed > 0 ? 'text-lamp-alert' : 'text-ink-faint'}
         />
         <KpiTile
-          label="Avg Talk Time"
+          label="Avg Talk"
           value={fmt(perf.avg_talk_seconds)}
+          Icon={Clock}
+          iconColor="text-ink-faint"
         />
         <KpiTile
-          label="Total Talk Time"
+          label="Total Talk"
           value={fmtHm(perf.total_talk_seconds)}
           color="text-brand-light"
+          Icon={Timer}
+          iconColor="text-brand-light"
         />
       </div>
 
-      {/* Status transitions strip */}
       {statusLog.length > 0 && (
         <div className="border-t border-panel-border pt-3 flex flex-wrap gap-3">
           <span className="stat-label self-center">Status changes:</span>
@@ -77,9 +89,10 @@ export default function PerformanceCard({ perf, loading }) {
   );
 }
 
-function KpiTile({ label, value, color = 'text-ink' }) {
+function KpiTile({ label, value, color = 'text-ink', Icon, iconColor = 'text-ink-faint' }) {
   return (
     <div className="bg-panel-raised rounded-lg p-2.5 text-center">
+      {Icon && <Icon size={14} className={`mx-auto mb-0.5 ${iconColor}`} />}
       <p className="stat-label">{label}</p>
       <p className={`font-bold text-lg tabular-nums mt-0.5 ${color}`}>{value}</p>
     </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { Phone, LogOut } from 'lucide-react';
 import { api }            from '../api/client.js';
 import { socket }         from '../api/socket.js';
 import StatusControls     from '../components/StatusControls.jsx';
@@ -90,9 +91,24 @@ export default function Dashboard({ auth, theme }) {
     return () => clearInterval(id);
   }, [fetchCalls]);
 
+  // ── Authoritative status sync on mount ───────────────────────────────────
+  // localStorage agent_info is written at login time and can be stale (e.g.
+  // status='Logged Out') while the DB/FreeSWITCH already have status='Available'.
+  // A single GET /api/agent-desk/me at mount corrects the snapshot without
+  // polling. Failure is silent — the existing localStorage value is preserved.
+  useEffect(() => {
+    let mounted = true;
+    api.me()
+      .then(fresh => {
+        if (mounted) updateAgent({ status: fresh.status, state: fresh.state });
+      })
+      .catch(err => console.warn('[agent-desktop] mount status sync failed — keeping existing status:', err.message));
+    return () => { mounted = false; };
+  }, [updateAgent]);
+
   // ── Socket.IO real-time events ────────────────────────────────────────────
   useEffect(() => {
-    // Re-sync ESL status on every socket connect/reconnect.
+    // Re-sync ESL status and agent status on every socket connect/reconnect.
     // The backend emits esl:status immediately on connection (socketService.js),
     // but that event can be missed if the Socket.IO transport drops during the
     // FreeSWITCH restart window. This REST call guarantees the UI reflects the
@@ -102,6 +118,12 @@ export default function Dashboard({ auth, theme }) {
         const { connected } = await api.eslStatus();
         setEslConn(connected);
       } catch { /* ignore — esl:status socket event is the primary path */ }
+      // Re-sync agent status from DB on reconnect — guards against stale
+      // localStorage after a backend restart that doesn't emit agent:status.
+      try {
+        const fresh = await api.me();
+        updateAgent({ status: fresh.status, state: fresh.state });
+      } catch { /* ignore — mount sync or next agent:status event will correct */ }
     };
 
     const onEslStatus   = ({ connected }) => setEslConn(connected);
@@ -140,12 +162,26 @@ export default function Dashboard({ auth, theme }) {
 
     const onAgentStatus = ({ agentId: evtAgent, status }) => {
       if (evtAgent !== agentId) return;
-      updateAgent({ status });
+      // Guard: only apply status when the event carries a real value.
+      // agent-status-change payloads can have status: null if the FreeSWITCH
+      // header is absent; spreading null onto agent.status then causes
+      // `null || 'Logged Out'` to display incorrectly.
+      if (status != null) updateAgent({ status });
     };
 
     const onAgentState = ({ agentId: evtAgent, status, state }) => {
       if (evtAgent !== agentId) return;
-      updateAgent({ status, state });
+      // agent-state-change events report state transitions (Waiting → Receiving →
+      // In a queue call) but do NOT always include CC-Agent-Status.  When the
+      // header is absent modesl returns null, and spreading { status: null } onto
+      // prev.agent overwrites a valid 'Available' with null, which then renders as
+      // 'Logged Out' via `agent?.status || 'Logged Out'`.
+      // Fix: include each field in the patch only when the event actually provides
+      // a value — identical logic to the Admin UI's `status ?? a.status` guard.
+      updateAgent({
+        ...(status != null && { status }),
+        ...(state  != null && { state  }),
+      });
     };
 
     socket.on('connect',         onConnect);
@@ -198,12 +234,7 @@ export default function Dashboard({ auth, theme }) {
                          flex items-center gap-3 sticky top-0 z-10">
         {/* Logo */}
         <div className="w-8 h-8 rounded-lg bg-brand flex items-center justify-center shrink-0">
-          <svg className="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21
-                 l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502
-                 l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" />
-          </svg>
+          <Phone size={16} className="text-white" strokeWidth={2} />
         </div>
 
         <span className="text-xs font-bold text-brand-light tracking-wide uppercase hidden sm:block">
@@ -237,11 +268,7 @@ export default function Dashboard({ auth, theme }) {
           className="p-2 rounded-lg text-ink-faint hover:text-ink-dim
                      hover:bg-panel-raised transition-colors"
         >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0
-                 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-          </svg>
+          <LogOut size={16} strokeWidth={1.75} />
         </button>
       </header>
 

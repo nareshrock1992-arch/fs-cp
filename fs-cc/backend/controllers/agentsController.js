@@ -21,6 +21,7 @@ export async function listAgents(req, res) {
       a.created_at,
       a.updated_at,
       (a.pin_hash IS NOT NULL) AS pin_hash,   -- boolean: does an Agent Desktop PIN exist?
+      ase.started_at           AS status_since, -- start of the current status segment (for idle timer)
       COALESCE(
         json_agg(
           json_build_object(
@@ -34,7 +35,15 @@ export async function listAgents(req, res) {
     FROM agents a
     LEFT JOIN agent_tiers t ON t.agent_id = a.id
     LEFT JOIN queues q       ON q.id       = t.queue_id
-    GROUP BY a.id
+    -- status_since: start of the current open status segment (Available or On Break)
+    -- NULL if no open segment exists (e.g. Logged Out, or session service not running)
+    LEFT JOIN LATERAL (
+      SELECT started_at
+      FROM   agent_state_events
+      WHERE  agent_id = a.agent_id AND ended_at IS NULL
+      LIMIT  1
+    ) ase ON true
+    GROUP BY a.id, ase.started_at
     ORDER BY a.full_name ASC
   `);
   res.json(rows);

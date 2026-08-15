@@ -17,7 +17,8 @@ export async function listLiveCalls(req, res) {
       c.disposition,
       EXTRACT(EPOCH FROM (now() - c.queue_enter_time))::INT  AS seconds_in_queue,
       EXTRACT(EPOCH FROM (now() - c.agent_answer_time))::INT AS seconds_on_call,
-      a.full_name AS agent_name
+      a.full_name       AS agent_name,
+      a.avaya_extension AS agent_extension
     FROM calls c
     LEFT JOIN agents a ON a.agent_id = c.agent_id
     WHERE c.end_time IS NULL

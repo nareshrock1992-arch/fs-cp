@@ -1,21 +1,27 @@
-export function FormField({ label, hint, children }) {
+export function FormField({ label, hint, children, required }) {
   return (
     <label className="block mb-4">
-      <span className="block text-xs font-medium dark:text-ink-dim text-gray-600 mb-1.5">{label}</span>
+      <span className="block text-[11px] font-semibold text-gray-500 dark:text-ink-faint
+                       uppercase tracking-wider mb-1.5">
+        {label}{required && <span className="text-lamp-alert ml-0.5">*</span>}
+      </span>
       {children}
-      {hint && <span className="block text-[11px] dark:text-ink-faint text-gray-400 mt-1">{hint}</span>}
+      {hint && (
+        <span className="block text-[11px] text-gray-400 dark:text-ink-faint mt-1">{hint}</span>
+      )}
     </label>
   );
 }
 
+// Canonical input class — uses brand-blue focus ring (was lamp-live/amber before)
 export const inputClass =
-  'w-full rounded-sm border dark:border-panel-border border-gray-300 dark:bg-panel-bg bg-white px-3 py-2 text-sm dark:text-ink text-gray-900 dark:placeholder:text-ink-faint placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-lamp-live/40 focus:border-lamp-live/60 transition-colors';
+  'field-input';
 
 export const buttonPrimary =
-  'inline-flex items-center justify-center gap-2 rounded bg-brand text-white text-sm font-semibold px-4 py-2 hover:bg-brand-dim active:brightness-95 transition-all shadow-lamp-blue disabled:opacity-50 disabled:pointer-events-none';
+  'btn-primary';
 
 export const buttonSecondary =
-  'inline-flex items-center justify-center gap-2 rounded-sm border dark:border-panel-border border-gray-300 dark:bg-panel-raised bg-gray-50 dark:text-ink text-gray-700 text-sm font-medium px-4 py-2 hover:bg-gray-100 dark:hover:bg-panel-border/60 transition-colors disabled:opacity-50 disabled:pointer-events-none';
+  'btn-secondary';
 
 export const buttonDanger =
-  'inline-flex items-center justify-center gap-2 rounded-sm border border-lamp-alert/40 text-lamp-alert text-sm font-medium px-4 py-2 hover:bg-lamp-alert/10 transition-colors disabled:opacity-50 disabled:pointer-events-none';
+  'btn-danger';

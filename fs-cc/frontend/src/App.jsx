@@ -18,15 +18,18 @@ function ProtectedRoute({ children }) {
 
 function AdminRoute({ children }) {
   const { user, isAuth } = useAuth();
+  if (!isAuth) return <Navigate to="/login" replace />;
+  if (user?.role !== 'admin') return <Navigate to="/" replace />;
+  return children;
+}
 
-  if (!isAuth) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (user?.role !== 'admin') {
-    return <Navigate to="/" replace />;
-  }
-
+function ReportsRoute({ children }) {
+  const { user, isAuth } = useAuth();
+  if (!isAuth) return <Navigate to="/login" replace />;
+  const canView =
+    user?.role === 'admin' ||
+    (Array.isArray(user?.permissions) && user.permissions.includes('view_reports'));
+  if (!canView) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -47,7 +50,14 @@ export default function App() {
         <Route path="agents" element={<Agents />} />
         <Route path="queues" element={<Queues />} />
         <Route path="queue-stats" element={<QueueStats />} />
-        <Route path="reports" element={<Reports />} />
+        <Route
+          path="reports"
+          element={
+            <ReportsRoute>
+              <Reports />
+            </ReportsRoute>
+          }
+        />
         <Route
           path="users"
           element={

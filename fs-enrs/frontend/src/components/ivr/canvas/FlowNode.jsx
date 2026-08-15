@@ -36,6 +36,7 @@ export default function FlowNode({
   onPortClick,
   onDragStart,
   onDragEnd,
+  onContextMenu,
 }) {
   const { byType } = useNodeTypes();
   const cfg   = byType[node.type] || FALLBACK_CFG;
@@ -67,6 +68,8 @@ export default function FlowNode({
     ? '#ef4444'
     : isSelected
     ? '#f1f5f9'
+    : isEntry
+    ? '#4f46e5'
     : hasWarnings
     ? '#f59e0b'
     : cfg.border;
@@ -89,10 +92,17 @@ export default function FlowNode({
       }}
       onClick={e => { e.stopPropagation(); }}
       onPointerUp={e => { e.stopPropagation(); onPortClick?.(node.id); }}
+      onContextMenu={e => { e.preventDefault(); e.stopPropagation(); onContextMenu?.(node.id, e); }}
     >
       {isEntry && (
-        <div className="absolute -top-5 left-0 text-[9px] text-brand font-bold uppercase tracking-widest">
-          ▼ Entry
+        <div
+          title="This node executes first when a call arrives"
+          style={{ position: 'absolute', top: -22, left: 0 }}
+          className="flex items-center gap-0.5 px-1.5 py-0.5 rounded-md
+                     bg-brand text-white text-[9px] font-bold uppercase tracking-wide
+                     select-none whitespace-nowrap pointer-events-none"
+        >
+          ▶ Start
         </div>
       )}
 
@@ -107,6 +117,8 @@ export default function FlowNode({
             ? `0 0 0 2px #f1f5f960, 0 4px 20px #00000060`
             : hasErrors
             ? `0 0 0 2px #ef444440`
+            : isEntry
+            ? `0 0 0 2px #4f46e560, 0 2px 12px #00000040`
             : hasWarnings
             ? `0 0 0 2px #f59e0b30`
             : '0 2px 8px #00000040',

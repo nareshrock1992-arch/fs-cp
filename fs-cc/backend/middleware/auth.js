@@ -26,6 +26,18 @@ export function requireAdmin(req, res, next) {
   next();
 }
 
+// Passes if the user is admin (implicitly all permissions) OR holds the named permission.
+export function requirePermission(permission) {
+  return function (req, res, next) {
+    const u = req.user;
+    if (!u) return res.status(401).json({ error: 'Authentication required' });
+    if (u.role === 'admin') return next();
+    const perms = Array.isArray(u.permissions) ? u.permissions : [];
+    if (perms.includes(permission)) return next();
+    return res.status(403).json({ error: 'Insufficient permissions' });
+  };
+}
+
 // Used by Agent Desktop routes only — tokens carry role:'agent'
 export function requireAgentAuth(req, res, next) {
   const header = req.headers.authorization || '';

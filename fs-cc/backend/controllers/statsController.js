@@ -2,7 +2,7 @@ import { query } from '../db/pool.js';
 import { isConnected } from '../services/eslService.js';
 
 export async function getDashboardStats(req, res) {
-  const [agentCounts, callsToday, queueSnapshot, sla] = await Promise.all([
+  const [agentCounts, callsToday, queueSnapshot, sla, queueDist] = await Promise.all([
     query(`SELECT status, COUNT(*)::INT AS count FROM agents WHERE active = true GROUP BY status`),
 
     query(
@@ -38,6 +38,30 @@ export async function getDashboardStats(req, res) {
        FROM calls c
        JOIN queues q ON q.name = c.queue_name
        WHERE c.start_time >= CURRENT_DATE`
+    ),
+
+    // Per-queue today distribution — same "offered" definition as getQueueStats:
+    // COUNT(*) FILTER (WHERE start_time >= CURRENT_DATE), all dispositions.
+    // LEFT JOIN so queues with zero calls today still appear.
+    query(
+      `SELECT
+         q.name         AS queue_name,
+         q.display_name,
+         COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE)::INT                           AS offered_today,
+         COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE AND c.disposition = 'answered')::INT AS answered_today,
+         COUNT(*) FILTER (
+           WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true
+             AND NOT EXISTS (SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid)
+         )::INT AS abandoned_queue_today,
+         COUNT(*) FILTER (
+           WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true
+             AND EXISTS (SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid AND ah.missed = true)
+         )::INT AS abandoned_agent_today
+       FROM queues q
+       LEFT JOIN calls c ON c.queue_name = q.name
+       WHERE q.active = true
+       GROUP BY q.name, q.display_name
+       ORDER BY offered_today DESC`
     )
   ]);
 
@@ -45,11 +69,12 @@ export async function getDashboardStats(req, res) {
   agentCounts.rows.forEach(r => (agentStatusMap[r.status] = r.count));
 
   res.json({
-    eslConnected:  isConnected(),
-    agents:        agentStatusMap,
-    callsToday:    callsToday.rows[0],
-    queueSnapshot: queueSnapshot.rows,
-    slaPct:        sla.rows[0]?.sla_pct ?? 0
+    eslConnected:     isConnected(),
+    agents:           agentStatusMap,
+    callsToday:       callsToday.rows[0],
+    queueSnapshot:    queueSnapshot.rows,
+    slaPct:           sla.rows[0]?.sla_pct ?? 0,
+    queueDistribution: queueDist.rows,
   });
 }
 

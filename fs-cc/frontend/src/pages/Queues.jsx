@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Plus, Pencil, Trash2, Users2, X } from 'lucide-react';
+import { useAuth } from '../hooks/useAuth.js';
 import { Queues as QueuesApi, Agents as AgentsApi } from '../api/client.js';
 import Panel from '../components/Panel.jsx';
 import Modal from '../components/Modal.jsx';
@@ -17,6 +18,9 @@ const STRATEGIES = [
 const EMPTY_FORM = { name: '', displayName: '', strategy: 'longest-idle-agent', maxWaitTime: 300, maxQueueSize: 50 };
 
 export default function Queues() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === 'admin';
+
   const [queues, setQueues]       = useState([]);
   const [allAgents, setAllAgents] = useState([]);
   const [loading, setLoading]     = useState(true);
@@ -116,11 +120,13 @@ export default function Queues() {
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end">
-        <button onClick={openCreate} className={buttonPrimary}>
-          <Plus size={15} /> Add Queue
-        </button>
-      </div>
+      {isAdmin && (
+        <div className="flex justify-end">
+          <button onClick={openCreate} className={buttonPrimary}>
+            <Plus size={15} /> Add Queue
+          </button>
+        </div>
+      )}
 
       <Panel>
         {loading && <p className="text-sm dark:text-ink-dim text-gray-500">Loading queues…</p>}
@@ -136,7 +142,7 @@ export default function Queues() {
                 <th className={thClass}>Strategy</th>
                 <th className={thClass}>Max Wait</th>
                 <th className={thClass}>Max Size</th>
-                <th className={`${thClass} text-right`}>Actions</th>
+                {isAdmin && <th className={`${thClass} text-right`}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -151,23 +157,25 @@ export default function Queues() {
                   </td>
                   <td className="py-3 font-mono tnum dark:text-ink-dim text-gray-500">{q.max_wait_time}s</td>
                   <td className="py-3 font-mono tnum dark:text-ink-dim text-gray-500">{q.max_queue_size}</td>
-                  <td className="py-3">
-                    <div className="flex justify-end gap-1.5">
-                      <button onClick={() => openTiers(q.name)}
-                        className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors"
-                        title="Manage agents">
-                        <Users2 size={14} />
-                      </button>
-                      <button onClick={() => openEdit(q)}
-                        className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors">
-                        <Pencil size={14} />
-                      </button>
-                      <button onClick={() => handleDelete(q.name)}
-                        className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  </td>
+                  {isAdmin && (
+                    <td className="py-3">
+                      <div className="flex justify-end gap-1.5">
+                        <button onClick={() => openTiers(q.name)}
+                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors"
+                          title="Manage agents">
+                          <Users2 size={14} />
+                        </button>
+                        <button onClick={() => openEdit(q)}
+                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors">
+                          <Pencil size={14} />
+                        </button>
+                        <button onClick={() => handleDelete(q.name)}
+                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -175,8 +183,8 @@ export default function Queues() {
         )}
       </Panel>
 
-      {/* Create / edit queue modal */}
-      <Modal
+      {/* Create / edit queue modal (admin only) */}
+      {isAdmin && <Modal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
         title={editingName ? `Edit ${editingName}` : 'Add Queue'}
@@ -223,58 +231,60 @@ export default function Queues() {
             </FormField>
           </div>
         </form>
-      </Modal>
+      </Modal>}
 
-      {/* Tier (agent assignment) modal */}
-      <Modal
-        open={Boolean(tierQueue)}
-        onClose={() => setTierQueue(null)}
-        title={tierQueue ? `Agents in ${tierQueue.display_name}` : ''}
-      >
-        {tierQueue && (
-          <div className="space-y-4">
-            <div className="flex gap-2">
-              <select value={tierAgentToAdd}
-                onChange={(e) => setTierAgentToAdd(e.target.value)}
-                className={inputClass}>
-                <option value="">Select an agent to add…</option>
-                {availableToAdd.map((a) => (
-                  <option key={a.agent_id} value={a.agent_id} className="dark:bg-panel-surface bg-white">
-                    {a.full_name} ({a.agent_id})
-                  </option>
-                ))}
-              </select>
-              <button className={buttonPrimary} onClick={handleAddTier} disabled={!tierAgentToAdd}>
-                Add
-              </button>
-            </div>
+      {/* Tier (agent assignment) modal — admin only */}
+      {isAdmin && (
+        <Modal
+          open={Boolean(tierQueue)}
+          onClose={() => setTierQueue(null)}
+          title={tierQueue ? `Agents in ${tierQueue.display_name}` : ''}
+        >
+          {tierQueue && (
+            <div className="space-y-4">
+              <div className="flex gap-2">
+                <select value={tierAgentToAdd}
+                  onChange={(e) => setTierAgentToAdd(e.target.value)}
+                  className={inputClass}>
+                  <option value="">Select an agent to add…</option>
+                  {availableToAdd.map((a) => (
+                    <option key={a.agent_id} value={a.agent_id} className="dark:bg-panel-surface bg-white">
+                      {a.full_name} ({a.agent_id})
+                    </option>
+                  ))}
+                </select>
+                <button className={buttonPrimary} onClick={handleAddTier} disabled={!tierAgentToAdd}>
+                  Add
+                </button>
+              </div>
 
-            <div className="space-y-2">
-              {tierQueue.agents.length === 0 && (
-                <p className="text-sm dark:text-ink-dim text-gray-500">No agents assigned to this queue yet.</p>
-              )}
-              {tierQueue.agents.map((a) => (
-                <div key={a.agent_id}
-                  className="flex items-center justify-between rounded-sm border dark:border-panel-border border-gray-200 px-3 py-2">
-                  <div className="flex items-center gap-3">
-                    <StatusLamp status={a.status} showLabel={false} />
-                    <div>
-                      <p className="text-sm font-medium dark:text-ink text-gray-800">{a.full_name}</p>
-                      <p className="text-[11px] dark:text-ink-faint text-gray-400 font-mono">
-                        {a.agent_id} · tier {a.level}.{a.position}
-                      </p>
+              <div className="space-y-2">
+                {tierQueue.agents.length === 0 && (
+                  <p className="text-sm dark:text-ink-dim text-gray-500">No agents assigned to this queue yet.</p>
+                )}
+                {tierQueue.agents.map((a) => (
+                  <div key={a.agent_id}
+                    className="flex items-center justify-between rounded-sm border dark:border-panel-border border-gray-200 px-3 py-2">
+                    <div className="flex items-center gap-3">
+                      <StatusLamp status={a.status} showLabel={false} />
+                      <div>
+                        <p className="text-sm font-medium dark:text-ink text-gray-800">{a.full_name}</p>
+                        <p className="text-[11px] dark:text-ink-faint text-gray-400 font-mono">
+                          {a.agent_id} · tier {a.level}.{a.position}
+                        </p>
+                      </div>
                     </div>
+                    <button onClick={() => handleRemoveTier(a.agent_id)}
+                      className="p-1 rounded-sm dark:text-ink-faint text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
+                      <X size={14} />
+                    </button>
                   </div>
-                  <button onClick={() => handleRemoveTier(a.agent_id)}
-                    className="p-1 rounded-sm dark:text-ink-faint text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
-                    <X size={14} />
-                  </button>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+        </Modal>
+      )}
     </div>
   );
 }

@@ -2,47 +2,155 @@
 @tailwind components;
 @tailwind utilities;
 
-html {
-  font-family: 'Inter', sans-serif;
+/* ── Light-mode surface tokens ─────────────────────────────────────────────── */
+/* Dark-mode surfaces are defined as hex strings in tailwind.config.js.        */
+/* These @layer base overrides patch the light-mode raw-Tailwind values into   */
+/* the same token names so components need only one class each.                */
+@layer base {
+  html {
+    font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-panel-bg dark:bg-panel-bg;
+    min-height: 100vh;
+  }
 }
 
+/* ── Global component utilities ─────────────────────────────────────────────── */
+@layer components {
+  /* Card — the single canonical card container */
+  .card {
+    @apply bg-white dark:bg-panel-surface border border-gray-200 dark:border-panel-border
+           rounded-xl shadow-card;
+  }
+
+  /* Unified button primitives */
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg bg-brand
+           hover:bg-brand-dim text-white font-semibold text-sm px-4 py-2
+           transition-colors focus:outline-none focus:ring-2 focus:ring-brand/40
+           disabled:opacity-60 disabled:pointer-events-none;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           border border-gray-200 dark:border-panel-border
+           bg-gray-50 dark:bg-panel-raised
+           text-gray-600 dark:text-ink-dim hover:text-gray-900 dark:hover:text-ink
+           font-medium text-sm px-4 py-2 transition-colors
+           focus:outline-none focus:ring-2 focus:ring-brand/30
+           disabled:opacity-60 disabled:pointer-events-none;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg
+           border border-lamp-alert/30 text-lamp-alert
+           hover:bg-lamp-alert/10 font-medium text-sm px-4 py-2 transition-colors
+           focus:outline-none focus:ring-2 focus:ring-lamp-alert/30
+           disabled:opacity-60 disabled:pointer-events-none;
+  }
+
+  /* Unified field input */
+  .field-input {
+    @apply w-full rounded-lg border border-gray-300 dark:border-panel-border
+           bg-gray-50 dark:bg-panel-raised
+           px-3 py-2 text-sm text-gray-900 dark:text-ink
+           placeholder:text-gray-400 dark:placeholder:text-ink-faint
+           focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand/60
+           transition-colors;
+  }
+
+  /* Unified table header cell */
+  .th {
+    @apply px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-wider
+           text-gray-400 dark:text-ink-faint bg-gray-50 dark:bg-panel-raised;
+  }
+
+  /* Status badge base */
+  .status-badge {
+    @apply inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full
+           text-[11px] font-semibold;
+  }
+}
+
+/* ── Page background ─────────────────────────────────────────────────────────── */
 body {
-  background-color: #0b0e14;
+  background-color: #F0F4F8;
+}
+.dark body {
+  background-color: #060B17;
+}
+
+/* Make dark-mode body work via html.dark class */
+html.dark body {
+  background-color: #060B17;
   background-image:
-    radial-gradient(circle at 0% 0%, rgba(242, 169, 59, 0.035), transparent 35%),
-    radial-gradient(circle at 100% 0%, rgba(91, 141, 239, 0.035), transparent 35%);
-  min-height: 100vh;
+    radial-gradient(circle at 0% 0%, rgba(37, 99, 235, 0.04), transparent 35%),
+    radial-gradient(circle at 100% 0%, rgba(76, 142, 245, 0.04), transparent 35%);
 }
 
+/* ── Text selection ──────────────────────────────────────────────────────────── */
 ::selection {
-  background: rgba(242, 169, 59, 0.25);
+  background: rgba(37, 99, 235, 0.25);
 }
 
-/* Tabular numerals everywhere a number needs to line up in a column */
+/* ── Tabular numerals ────────────────────────────────────────────────────────── */
 .tnum {
   font-variant-numeric: tabular-nums;
 }
 
-/* Thin scrollbars to match the console aesthetic */
+/* ── Scrollbars ──────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #232938;
+  background: #CBD5E1;
   border-radius: 8px;
 }
+html.dark ::-webkit-scrollbar-thumb {
+  background: #1C2A42;
+}
 ::-webkit-scrollbar-thumb:hover {
-  background: #2e3648;
+  background: #94A3B8;
+}
+html.dark ::-webkit-scrollbar-thumb:hover {
+  background: #2A3A56;
 }
 
+/* ── Animations ──────────────────────────────────────────────────────────────── */
 @keyframes pulse-soft {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
 }
 .animate-pulse-soft {
   animation: pulse-soft 2s ease-in-out infinite;
+}
+
+@keyframes ring-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0.5); }
+  70% { box-shadow: 0 0 0 8px rgba(245, 166, 35, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(245, 166, 35, 0); }
+}
+.animate-ring-pulse {
+  animation: ring-pulse 1.5s ease-out infinite;
+}
+
+@keyframes slide-in-up {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-in-up {
+  animation: slide-in-up 0.2s ease-out;
+}
+
+/* ── Skeleton loader ─────────────────────────────────────────────────────────── */
+.skeleton {
+  @apply animate-pulse rounded-lg bg-gray-200 dark:bg-panel-raised;
 }

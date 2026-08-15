@@ -13,12 +13,12 @@ WORKDIR /app
 # Copy manifests only — layer is cached until package files change
 COPY package.json package-lock.json* ./
 
-# Use npm install --omit=dev rather than npm ci so a lockfile that has not yet
-# been regenerated after a devDependency update (e.g. vitest added to
-# package.json) does not abort the build. Production dependencies are still
-# fully deterministic because only package.json governs what is installed with
-# --omit=dev; devDependencies are never included.
-RUN npm install --omit=dev --ignore-scripts
+# npm ci requires lockfile; fall back to npm install if lockfile absent
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev --ignore-scripts; \
+    else \
+      npm install --omit=dev --ignore-scripts; \
+    fi
 
 # ── Stage 2: production image ─────────────────────────────────────────────────
 FROM node:20-alpine AS production
@@ -40,6 +40,7 @@ COPY . .
 # These are overridden by bind mounts in docker-compose.yml (./uploads/cc, ./logs/cc).
 # The mkdir here ensures the paths exist even without the bind mount (e.g., CI runs).
 RUN mkdir -p uploads logs \
+    && chmod +x docker-entrypoint.sh \
     && chown -R node:node /app
 
 # Drop from root to the built-in "node" user (uid 1000)
@@ -48,12 +49,11 @@ USER node
 EXPOSE 4000
 
 # Healthcheck polls the public health endpoint.
-# start_period allows time for ESL to connect and DB pool to warm.
-HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=3 \
+# start_period allows time for migrations, bootstrap, ESL connect, and DB pool warm-up.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
   CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
 
-# tini as entrypoint ensures:
-#   1. Zombie reaping (tini is a proper init process)
-#   2. Signal forwarding to the node process
-ENTRYPOINT ["/sbin/tini", "--"]
+# tini as PID 1 — zombie reaping + signal forwarding.
+# docker-entrypoint.sh runs migrations + bootstrap, then execs node server.js.
+ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

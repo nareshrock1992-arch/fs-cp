@@ -9,6 +9,7 @@
 import { z } from 'zod';
 import { query } from '../db/pool.js';
 import { asyncHandler } from '../middleware/asyncHandler.js';
+import { effectiveTenantId, requireTenantForWrite } from '../middleware/tenantScope.js';
 
 const emptyToNull = z.preprocess(v => (v === '' ? null : v), z.string().nullable().optional());
 
@@ -34,7 +35,7 @@ const ServicePatchSchema = ServiceSchema.partial();
 export const listServices = asyncHandler(async (req, res) => {
   const orgId    = req.query.organization_id || null;
   const type     = req.query.type || null;
-  const tenantId = req.user.tenantId;
+  const tenantId = effectiveTenantId(req);
 
   const { rows } = await query(
     `SELECT
@@ -81,7 +82,7 @@ export const listServices = asyncHandler(async (req, res) => {
      LEFT JOIN ens_configurations ec  ON ec.id  = en.ens_configuration_id AND ec.deleted_at IS NULL
      LEFT JOIN ers_configurations ers ON ers.id = en.ers_configuration_id AND ers.deleted_at IS NULL
      WHERE en.deleted_at IS NULL
-       AND en.tenant_id = $3
+       AND ($3::int IS NULL OR en.tenant_id = $3)
        AND ($1::int  IS NULL OR en.organization_id = $1)
        AND ($2::text IS NULL OR en.type = $2)
      ORDER BY en.sort_order ASC, en.type, en.number`,
@@ -94,6 +95,7 @@ export const listServices = asyncHandler(async (req, res) => {
 // ── Get single service ────────────────────────────────────────────────────────
 
 export const getService = asyncHandler(async (req, res) => {
+  const tenantId = effectiveTenantId(req);
   const { rows: [row] } = await query(
     `SELECT en.*, o.name AS organization_name,
        ec.id AS ens_config_id, ec.name AS ens_config_name,
@@ -107,30 +109,71 @@ export const getService = asyncHandler(async (req, res) => {
      LEFT JOIN organizations o    ON o.id  = en.organization_id
      LEFT JOIN ens_configurations ec  ON ec.id  = en.ens_configuration_id AND ec.deleted_at IS NULL
      LEFT JOIN ers_configurations ers ON ers.id = en.ers_configuration_id AND ers.deleted_at IS NULL
-     WHERE en.id = $1 AND en.deleted_at IS NULL`,
-    [req.params.id]
+     WHERE en.id = $1 AND en.deleted_at IS NULL
+       AND ($2::int IS NULL OR en.tenant_id = $2)`,
+    [req.params.id, tenantId]
   );
   if (!row) return res.status(404).json({ error: 'Service not found' });
   res.json(row);
 });
+
+// ── Ownership check helper ────────────────────────────────────────────────────
+// Verifies that a referenced configuration row belongs to the caller's
+// authorized tenant. SUPER_ADMIN in global mode (tenantId = null) bypasses
+// the check — they are operating across all tenants intentionally.
+async function assertConfigOwnership(table, id, tenantId, label) {
+  const { rows: [row] } = await query(
+    `SELECT tenant_id FROM ${table} WHERE id = $1 AND deleted_at IS NULL`,
+    [id]
+  );
+  if (!row) return { notFound: true, label };
+  if (tenantId !== null && row.tenant_id !== tenantId) {
+    return { forbidden: true, label };
+  }
+  return { ok: true };
+}
 
 // ── Create service (emergency number) ────────────────────────────────────────
 
 export const createService = asyncHandler(async (req, res) => {
   const d = ServiceSchema.parse(req.body);
 
-  // Determine tenant_id from organization if provided; fall back to the
-  // authenticated user's tenant so a NULL-tenant org can never produce an
-  // invisible (unscoped) emergency number.
-  let tenantId = null;
+  // Authoritative tenant: requireTenantForWrite is the single source of truth.
+  // ADMIN always gets req.user.tenantId (JWT). SUPER_ADMIN must supply an
+  // explicit tenant selection or receives HTTP 400.
+  // organization_id is never used to derive or override the caller's tenant.
+  const tenantId = requireTenantForWrite(req);
+
+  // If an organization is supplied, it must belong to the authorized tenant.
   if (d.organization_id) {
     const { rows: [org] } = await query(
       `SELECT tenant_id FROM organizations WHERE id = $1 AND deleted_at IS NULL`,
       [d.organization_id]
     );
-    tenantId = org?.tenant_id ?? null;
+    if (!org) return res.status(404).json({ error: 'Organization not found' });
+    if (org.tenant_id !== tenantId) {
+      return res.status(403).json({ error: 'Organization does not belong to the authorized tenant' });
+    }
   }
-  tenantId = tenantId ?? req.user?.tenantId ?? null;
+
+  // Each referenced configuration must belong to the authorized tenant.
+  // This prevents an ADMIN from linking another tenant's ENS/ERS/IVR config,
+  // which would route FreeSWITCH calls through a foreign tenant's configuration.
+  if (d.ens_configuration_id) {
+    const r = await assertConfigOwnership('ens_configurations', d.ens_configuration_id, tenantId, 'ENS configuration');
+    if (r.notFound)  return res.status(404).json({ error: 'ENS configuration not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'ENS configuration does not belong to the authorized tenant' });
+  }
+  if (d.ers_configuration_id) {
+    const r = await assertConfigOwnership('ers_configurations', d.ers_configuration_id, tenantId, 'ERS configuration');
+    if (r.notFound)  return res.status(404).json({ error: 'ERS configuration not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'ERS configuration does not belong to the authorized tenant' });
+  }
+  if (d.ivr_flow_id) {
+    const r = await assertConfigOwnership('ivr_flows', d.ivr_flow_id, tenantId, 'IVR flow');
+    if (r.notFound)  return res.status(404).json({ error: 'IVR flow not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'IVR flow does not belong to the authorized tenant' });
+  }
 
   const { rows: [row] } = await query(
     `INSERT INTO emergency_numbers (
@@ -154,17 +197,41 @@ export const createService = asyncHandler(async (req, res) => {
 
 export const updateServiceMeta = asyncHandler(async (req, res) => {
   const d = ServicePatchSchema.parse(req.body);
+  const tenantId = effectiveTenantId(req);
+
+  // Validate all FK references against the caller's authorized tenant.
+  // tenant_id on the record is immutable after creation.
+  if (d.organization_id != null) {
+    const { rows: [org] } = await query(
+      `SELECT tenant_id FROM organizations WHERE id = $1 AND deleted_at IS NULL`,
+      [d.organization_id]
+    );
+    if (!org) return res.status(404).json({ error: 'Organization not found' });
+    if (tenantId !== null && org.tenant_id !== tenantId) {
+      return res.status(403).json({ error: 'Organization does not belong to the authorized tenant' });
+    }
+  }
+  if (d.ens_configuration_id != null) {
+    const r = await assertConfigOwnership('ens_configurations', d.ens_configuration_id, tenantId, 'ENS configuration');
+    if (r.notFound)  return res.status(404).json({ error: 'ENS configuration not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'ENS configuration does not belong to the authorized tenant' });
+  }
+  if (d.ers_configuration_id != null) {
+    const r = await assertConfigOwnership('ers_configurations', d.ers_configuration_id, tenantId, 'ERS configuration');
+    if (r.notFound)  return res.status(404).json({ error: 'ERS configuration not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'ERS configuration does not belong to the authorized tenant' });
+  }
+  if (d.ivr_flow_id != null) {
+    const r = await assertConfigOwnership('ivr_flows', d.ivr_flow_id, tenantId, 'IVR flow');
+    if (r.notFound)  return res.status(404).json({ error: 'IVR flow not found' });
+    if (r.forbidden) return res.status(403).json({ error: 'IVR flow does not belong to the authorized tenant' });
+  }
 
   const { rows: [row] } = await query(
     `UPDATE emergency_numbers SET
        number                = COALESCE($2,  number),
        type                  = COALESCE($3,  type),
        organization_id       = COALESCE($4,  organization_id),
-       tenant_id             = CASE
-         WHEN $4::int IS NOT NULL THEN
-           (SELECT o.tenant_id FROM organizations o WHERE o.id = $4 AND o.deleted_at IS NULL)
-         ELSE tenant_id
-       END,
        ens_configuration_id  = COALESCE($5,  ens_configuration_id),
        ers_configuration_id  = COALESCE($6,  ers_configuration_id),
        ivr_flow_id           = COALESCE($7,  ivr_flow_id),
@@ -176,12 +243,14 @@ export const updateServiceMeta = asyncHandler(async (req, res) => {
        is_active             = COALESCE($13, is_active),
        updated_at            = now()
      WHERE id = $1 AND deleted_at IS NULL
+       AND ($14::int IS NULL OR tenant_id = $14)
      RETURNING *`,
     [
       req.params.id,
       d.number, d.type, d.organization_id,
       d.ens_configuration_id, d.ers_configuration_id, d.ivr_flow_id,
       d.service_name, d.description, d.icon, d.color, d.sort_order, d.is_active,
+      tenantId,
     ]
   );
   if (!row) return res.status(404).json({ error: 'Service not found' });
@@ -191,10 +260,14 @@ export const updateServiceMeta = asyncHandler(async (req, res) => {
 // ── Delete service ────────────────────────────────────────────────────────────
 
 export const deleteService = asyncHandler(async (req, res) => {
-  await query(
-    `UPDATE emergency_numbers SET deleted_at = now(), updated_at = now() WHERE id = $1`,
-    [req.params.id]
+  const tenantId = effectiveTenantId(req);
+  const { rowCount } = await query(
+    `UPDATE emergency_numbers SET deleted_at = now(), updated_at = now()
+     WHERE id = $1 AND deleted_at IS NULL
+       AND ($2::int IS NULL OR tenant_id = $2)`,
+    [req.params.id, tenantId]
   );
+  if (!rowCount) return res.status(404).json({ error: 'Service not found' });
   res.status(204).end();
 });
 

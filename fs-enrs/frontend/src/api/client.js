@@ -4,17 +4,43 @@ function getToken() {
   return localStorage.getItem('enrs_token');
 }
 
+function getActiveTenantId() {
+  try {
+    const user = JSON.parse(localStorage.getItem('enrs_user') || 'null');
+    if (user?.role !== 'SUPER_ADMIN') return null;
+    const stored = JSON.parse(localStorage.getItem('enrs_active_tenant') || 'null');
+    return stored?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
 async function request(method, path, body, opts = {}) {
   const token = getToken();
-  const res = await fetch(`${BASE}${path}`, {
+  const activeTenantId = getActiveTenantId();
+
+  // Inject tenant_id for SUPER_ADMIN operating in a specific tenant context.
+  // GET: append ?tenant_id=N to the URL. POST/PUT/PATCH: add to body if not already set.
+  let resolvedPath = path;
+  let resolvedBody = body;
+  if (activeTenantId) {
+    if (method === 'GET' || method === 'DELETE') {
+      const sep = path.includes('?') ? '&' : '?';
+      resolvedPath = `${path}${sep}tenant_id=${activeTenantId}`;
+    } else if (method !== 'GET' && !(body instanceof FormData)) {
+      resolvedBody = body ? { ...body } : {};
+      if (!resolvedBody.tenant_id) resolvedBody.tenant_id = activeTenantId;
+    }
+  }
+  const res = await fetch(`${BASE}${resolvedPath}`, {
     method,
     credentials: 'include',
     headers: {
-      ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(resolvedBody instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...opts.headers,
     },
-    body: body instanceof FormData ? body : body ? JSON.stringify(body) : undefined,
+    body: resolvedBody instanceof FormData ? resolvedBody : resolvedBody ? JSON.stringify(resolvedBody) : undefined,
   });
 
   if (res.status === 401 && path !== '/auth/login' && path !== '/auth/refresh') {
@@ -53,9 +79,17 @@ export const api = {
   dashActive:  () => request('GET', '/dashboard/active'),
   dashChart:   (p) => request('GET', `/dashboard/chart?period=${p || 'week'}`),
 
+  // Tenants (SUPER_ADMIN only)
+  tenants: {
+    list:   (q)      => request('GET',   `/tenants?${new URLSearchParams({ limit: 1000, ...(q || {}) })}`),
+    get:    (id)     => request('GET',   `/tenants/${id}`),
+    create: (d)      => request('POST',  '/tenants', d),
+    update: (id, d)  => request('PATCH', `/tenants/${id}`, d),
+  },
+
   // Users
   users: {
-    list:   ()       => request('GET',    '/users'),
+    list:   (q)      => request('GET',    `/users?${new URLSearchParams({ ...(q || {}) })}`),
     get:    (id)     => request('GET',    `/users/${id}`),
     create: (d)      => request('POST',   '/users', d),
     update: (id, d)  => request('PUT',    `/users/${id}`, d),

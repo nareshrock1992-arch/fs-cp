@@ -1,7 +1,9 @@
 import bcrypt from 'bcryptjs';
 import { query } from '../db/pool.js';
 
-const SAFE_COLS = `id, username, role, created_at`;
+const SAFE_COLS = `id, username, role, permissions, created_at`;
+
+const VALID_PERMISSIONS = ['view_reports', 'change_agent_state'];
 
 export async function listUsers(_req, res) {
   const { rows } = await query(`SELECT ${SAFE_COLS} FROM users ORDER BY created_at`);
@@ -52,6 +54,24 @@ export async function deleteUser(req, res) {
   }
   await query(`DELETE FROM users WHERE id=$1`, [id]);
   res.status(204).end();
+}
+
+export async function updatePermissions(req, res) {
+  const id = parseInt(req.params.id);
+  const { permissions } = req.body || {};
+  if (!Array.isArray(permissions)) {
+    return res.status(400).json({ error: 'permissions must be an array' });
+  }
+  const invalid = permissions.filter(p => !VALID_PERMISSIONS.includes(p));
+  if (invalid.length) {
+    return res.status(400).json({ error: `Unknown permissions: ${invalid.join(', ')}` });
+  }
+  const { rows } = await query(
+    `UPDATE users SET permissions=$1 WHERE id=$2 RETURNING ${SAFE_COLS}`,
+    [permissions, id]
+  );
+  if (!rows[0]) return res.status(404).json({ error: 'User not found' });
+  res.json(rows[0]);
 }
 
 export async function resetPassword(req, res) {

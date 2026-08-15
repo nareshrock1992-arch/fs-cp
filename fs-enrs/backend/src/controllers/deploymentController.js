@@ -16,6 +16,7 @@ import { deployFlow, redeployAll, getDeploymentHistory, previewDeployment }
                                  from '../services/deploymentEngine.js';
 import { runDiagnostics, pingEsl, reloadXml, disableLegacyExtension }
                                  from '../services/diagnosticsService.js';
+import { effectiveTenantId, requireTenantForWrite } from '../middleware/tenantScope.js';
 
 // ── Audio upload config ───────────────────────────────────────────────────────
 
@@ -59,20 +60,26 @@ export const listAudio = asyncHandler(async (req, res) => {
   const page  = Math.max(1, Number(req.query.page)  || 1);
   const limit = Math.min(200, Number(req.query.limit) || 50);
   const offset = (page - 1) * limit;
+  const tenantId = effectiveTenantId(req);
 
+  // Tenant isolation: return files owned by this tenant OR files with no tenant
+  // (system/shared audio imported before tenant tagging was introduced).
+  // SUPER_ADMIN with no selected tenant sees all files.
   const { rows } = await query(
     `SELECT m.*, o.name AS organization_name, u.email AS uploaded_by_email
      FROM media_files m
      LEFT JOIN organizations o ON o.id = m.organization_id
      LEFT JOIN users u ON u.id = m.uploaded_by_user_id
      WHERE m.deleted_at IS NULL
-       AND ($1::int IS NULL OR m.organization_id = $1)
-       AND ($2::text IS NULL OR m.category = $2)
-       AND ($3::text IS NULL OR m.name ILIKE '%' || $3 || '%')
-       AND ($4::boolean IS NULL OR m.is_deployed = $4)
+       AND ($1::int IS NULL OR m.tenant_id = $1 OR m.tenant_id IS NULL)
+       AND ($2::int IS NULL OR m.organization_id = $2)
+       AND ($3::text IS NULL OR m.category = $3)
+       AND ($4::text IS NULL OR m.name ILIKE '%' || $4 || '%')
+       AND ($5::boolean IS NULL OR m.is_deployed = $5)
      ORDER BY m.created_at DESC
-     LIMIT $5 OFFSET $6`,
+     LIMIT $6 OFFSET $7`,
     [
+      tenantId,
       organization_id || null,
       category || null,
       search    || null,
@@ -84,11 +91,12 @@ export const listAudio = asyncHandler(async (req, res) => {
   const { rows: [{ total }] } = await query(
     `SELECT COUNT(*)::int AS total FROM media_files
      WHERE deleted_at IS NULL
-       AND ($1::int IS NULL OR organization_id = $1)
-       AND ($2::text IS NULL OR category = $2)
-       AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%')
-       AND ($4::boolean IS NULL OR is_deployed = $4)`,
-    [organization_id || null, category || null, search || null,
+       AND (tenant_id = $1 OR tenant_id IS NULL)
+       AND ($2::int IS NULL OR organization_id = $2)
+       AND ($3::text IS NULL OR category = $3)
+       AND ($4::text IS NULL OR name ILIKE '%' || $4 || '%')
+       AND ($5::boolean IS NULL OR is_deployed = $5)`,
+    [tenantId, organization_id || null, category || null, search || null,
      deployed != null ? (deployed === 'true') : null]
   );
 
@@ -201,6 +209,7 @@ export const listCategories = asyncHandler(async (req, res) => {
 /** POST /deployment/audio/upload */
 export const uploadAudio = asyncHandler(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Audio file required (field: file)' });
+  const uploadTenantId = requireTenantForWrite(req);
 
   const {
     organization_id,
@@ -226,7 +235,7 @@ export const uploadAudio = asyncHandler(async (req, res) => {
       req.file.size,
       category,
       description,
-      req.user.tenantId || null,
+      uploadTenantId,
     ]
   );
 
@@ -262,9 +271,12 @@ export const uploadAudio = asyncHandler(async (req, res) => {
 
 /** POST /deployment/audio/:id/deploy  — manually deploy/re-deploy a file */
 export const deployAudio = asyncHandler(async (req, res) => {
+  // Tenant isolation: only allow deploying files owned by this tenant or shared system files.
   const { rows: [record] } = await query(
-    `SELECT * FROM media_files WHERE id = $1 AND deleted_at IS NULL`,
-    [req.params.id]
+    `SELECT * FROM media_files
+     WHERE id = $1 AND deleted_at IS NULL
+       AND ($2::int IS NULL OR tenant_id = $2 OR tenant_id IS NULL)`,
+    [req.params.id, effectiveTenantId(req)]
   );
   if (!record) return res.status(404).json({ error: 'Audio file not found' });
   if (!record.path_or_uri) return res.status(400).json({ error: 'No source file path on record' });
@@ -275,9 +287,12 @@ export const deployAudio = asyncHandler(async (req, res) => {
 
 /** GET /deployment/audio/:id/stream  — authenticated audio preview */
 export const streamAudio = asyncHandler(async (req, res) => {
+  // Tenant isolation: only allow streaming files owned by this tenant or shared system files.
   const { rows: [record] } = await query(
-    `SELECT * FROM media_files WHERE id = $1 AND deleted_at IS NULL`,
-    [req.params.id]
+    `SELECT * FROM media_files
+     WHERE id = $1 AND deleted_at IS NULL
+       AND ($2::int IS NULL OR tenant_id = $2 OR tenant_id IS NULL)`,
+    [req.params.id, effectiveTenantId(req)]
   );
   if (!record) return res.status(404).json({ error: 'Not found' });
 
@@ -298,9 +313,13 @@ export const streamAudio = asyncHandler(async (req, res) => {
 
 /** DELETE /deployment/audio/:id */
 export const deleteAudio = asyncHandler(async (req, res) => {
+  // Tenant isolation: only allow deleting files owned by this tenant or shared system files.
   const { rows: [record] } = await query(
-    `UPDATE media_files SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL RETURNING *`,
-    [req.params.id]
+    `UPDATE media_files SET deleted_at = now()
+     WHERE id = $1 AND deleted_at IS NULL
+       AND ($2::int IS NULL OR tenant_id = $2 OR tenant_id IS NULL)
+     RETURNING *`,
+    [req.params.id, effectiveTenantId(req)]
   );
   if (!record) return res.status(404).json({ error: 'Not found' });
 
@@ -335,14 +354,14 @@ export const listFlowStatus = asyncHandler(async (req, res) => {
      GROUP BY f.flow_uuid, f.name, f.last_deployed_at,
               f.last_deployment_status, f.last_deployed_version, v.version_number
      ORDER BY f.name`,
-    [req.user.tenantId || null]
+    [effectiveTenantId(req)]
   );
   res.json({ flows: rows });
 });
 
 /** GET /deployment/flows/:uuid/preview */
 export const previewDeploy = asyncHandler(async (req, res) => {
-  const preview = await previewDeployment(req.params.uuid, req.user.tenantId);
+  const preview = await previewDeployment(req.params.uuid, effectiveTenantId(req));
   if (!preview) return res.status(404).json({ error: 'Flow not found or not published' });
   res.json(preview);
 });
@@ -351,7 +370,7 @@ export const previewDeploy = asyncHandler(async (req, res) => {
 export const triggerDeploy = asyncHandler(async (req, res) => {
   const report = await deployFlow(req.params.uuid, {
     deployedBy: req.user.id,
-    tenantId:   req.user.tenantId,
+    tenantId:   effectiveTenantId(req),
   });
   const status = report.status === 'success' ? 200 : 422;
   res.status(status).json(report);
@@ -359,6 +378,14 @@ export const triggerDeploy = asyncHandler(async (req, res) => {
 
 /** GET /deployment/flows/:uuid/history */
 export const deployHistory = asyncHandler(async (req, res) => {
+  // Verify the flow belongs to the authenticated tenant before exposing history.
+  const { rows: [flow] } = await query(
+    `SELECT id FROM ivr_flows
+     WHERE flow_uuid = $1 AND ($2::int IS NULL OR tenant_id = $2) AND deleted_at IS NULL`,
+    [req.params.uuid, effectiveTenantId(req)]
+  );
+  if (!flow) return res.status(404).json({ error: 'Flow not found' });
+
   const history = await getDeploymentHistory(req.params.uuid, Number(req.query.limit) || 10);
   res.json({ history });
 });

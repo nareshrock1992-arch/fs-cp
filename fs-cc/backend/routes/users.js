@@ -13,5 +13,6 @@ router.post('/',              asyncHandler(users.createUser));
 router.put('/:id',            asyncHandler(users.updateUser));
 router.delete('/:id',         asyncHandler(users.deleteUser));
 router.post('/:id/reset-password', asyncHandler(users.resetPassword));
+router.patch('/:id/permissions',   asyncHandler(users.updatePermissions));
 
 export default router;

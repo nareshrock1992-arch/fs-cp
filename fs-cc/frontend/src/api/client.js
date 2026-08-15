@@ -40,11 +40,12 @@ export const Auth = {
 
 // ---- Users (admin only) ----
 export const Users = {
-  list:          ()             => api.get('/users').then(r => r.data),
-  create:        (payload)      => api.post('/users', payload).then(r => r.data),
-  update:        (id, payload)  => api.put(`/users/${id}`, payload).then(r => r.data),
-  remove:        (id)           => api.delete(`/users/${id}`),
-  resetPassword: (id, password) => api.post(`/users/${id}/reset-password`, { password }).then(r => r.data),
+  list:              ()                   => api.get('/users').then(r => r.data),
+  create:            (payload)            => api.post('/users', payload).then(r => r.data),
+  update:            (id, payload)        => api.put(`/users/${id}`, payload).then(r => r.data),
+  remove:            (id)                 => api.delete(`/users/${id}`),
+  resetPassword:     (id, password)       => api.post(`/users/${id}/reset-password`, { password }).then(r => r.data),
+  updatePermissions: (id, permissions)    => api.patch(`/users/${id}/permissions`, { permissions }).then(r => r.data),
 };
 
 // ---- Agents ----

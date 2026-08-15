@@ -6,7 +6,7 @@ import morgan  from 'morgan';
 import { config }          from './config/index.js';
 import { connectESL }      from './services/eslService.js';
 import { initSocket }      from './services/socketService.js';
-import { requireAuth }     from './middleware/auth.js';
+import { requireAuth, requireAdmin } from './middleware/auth.js';
 import { warmPool }        from './db/pool.js';
 import { runMigrations }   from './db/migrationRunner.js';
 import { writeAndReloadXml, generateCallcenterXml } from './utils/queueXml.js';
@@ -46,13 +46,13 @@ app.use('/api/calls',   callsRoutes);
 app.use('/api/stats',   statsRoutes);
 app.use('/api/reports', reportsRoutes);
 
-// ── Queue XML export (admin only, already behind requireAuth above) ───────────
-app.post('/api/queues/export-xml', asyncHandler(async (_req, res) => {
+// ── Queue XML export (admin only) ─────────────────────────────────────────────
+app.post('/api/queues/export-xml', requireAdmin, asyncHandler(async (_req, res) => {
   const result = await writeAndReloadXml();
   res.json(result);
 }));
 
-app.get('/api/queues/preview-xml', asyncHandler(async (_req, res) => {
+app.get('/api/queues/preview-xml', requireAdmin, asyncHandler(async (_req, res) => {
   const xml = await generateCallcenterXml();
   res.type('text/xml').send(xml);
 }));

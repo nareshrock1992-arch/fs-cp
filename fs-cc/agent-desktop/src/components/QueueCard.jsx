@@ -1,3 +1,5 @@
+import { Users } from 'lucide-react';
+
 function fmt(seconds) {
   if (!seconds) return '0s';
   if (seconds < 60)  return `${seconds}s`;
@@ -56,7 +58,7 @@ export default function QueueCard({ q }) {
 
       {/* Agent availability */}
       <div className="flex items-center gap-2 text-xs">
-        <span className="text-ink-faint">Agents:</span>
+        <Users size={12} className="text-ink-faint shrink-0" />
         <span className="flex items-center gap-1 text-lamp-available">
           <span className="w-1.5 h-1.5 rounded-full bg-lamp-available" />
           {q.available_agents ?? 0} avail

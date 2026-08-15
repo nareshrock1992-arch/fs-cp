@@ -13,7 +13,7 @@ export async function login(req, res) {
   }
 
   const { rows } = await query(
-    `SELECT id, username, password_hash, role FROM users WHERE username = $1`,
+    `SELECT id, username, password_hash, role, permissions FROM users WHERE username = $1`,
     [username.trim().toLowerCase()]
   );
 
@@ -27,13 +27,14 @@ export async function login(req, res) {
     return res.status(401).json({ error: 'Invalid credentials' });
   }
 
+  const permissions = user.permissions ?? [];
   const token = jwt.sign(
-    { id: user.id, username: user.username, role: user.role },
+    { id: user.id, username: user.username, role: user.role, permissions },
     JWT_SECRET,
     { expiresIn: TOKEN_TTL }
   );
 
-  res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+  res.json({ token, user: { id: user.id, username: user.username, role: user.role, permissions } });
 }
 
 export function me(req, res) {
