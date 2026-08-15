@@ -448,11 +448,121 @@ ufw enable
 
 ---
 
+## Day-to-Day Operations
+
+### Viewing logs
+
+```bash
+cd /opt/omni/deploy
+
+# Tail all services
+docker compose logs -f
+
+# Tail one service
+docker compose logs -f enrs-backend
+docker compose logs -f cc-backend
+docker compose logs -f nginx
+
+# Last 200 lines only (no follow)
+docker compose logs --tail=200 enrs-backend
+```
+
+---
+
+### Restarting services safely
+
+```bash
+cd /opt/omni/deploy
+
+# Restart one service (migrations + bootstrap run again — idempotent, safe)
+docker compose restart enrs-backend
+docker compose restart cc-backend
+
+# Restart everything
+docker compose restart
+```
+
+> Restarting the ENRS or CC backends does not create duplicate administrator accounts. Both bootstrap scripts check for an existing admin first and exit immediately if one is found.
+
+---
+
+### Stopping the system
+
+```bash
+cd /opt/omni/deploy
+
+# Stop containers but keep data volumes intact
+docker compose stop
+
+# Stop AND remove containers (data volumes are preserved)
+docker compose down
+```
+
+> `docker compose down` does NOT delete database data unless you add `--volumes`. Never add `--volumes` on a production system.
+
+---
+
+### Upgrading to a new release
+
+1. Back up the database (see **Backup** below).
+2. Pull the new release package into `/opt/omni`.
+3. Review the release notes for any new required `.env` variables.
+4. Add any new variables to `deploy/.env`.
+5. Rebuild and restart:
+   ```bash
+   cd /opt/omni/deploy
+   docker compose build
+   docker compose up -d
+   ```
+6. New database migrations apply automatically on container startup (idempotent).
+7. Run `bash scripts/post-install.sh` to confirm all services are healthy.
+
+---
+
+## Backup
+
+See **[BACKUP_GUIDE.md](BACKUP_GUIDE.md)** for full backup and restore procedures.
+
+**Minimum daily backup target:** the PostgreSQL data volume.
+
+```bash
+# Quick database backup (run on the server)
+docker compose exec postgres pg_dumpall -U postgres > omni_backup_$(date +%Y%m%d).sql
+```
+
+Store backups off-server. The database volume path is `deploy/postgres/data/` by default.
+
+---
+
+## What NOT to Modify
+
+| File / Directory | Why |
+|---|---|
+| `deploy/.env` | Contains all secrets. Never commit to git. Never share. |
+| `deploy/ssl/privkey.pem` | TLS private key. Keep permissions at `600`. |
+| `fs-enrs/` (application files) | Application source — changes belong in `fs-enrs` repository. |
+| `fs-cc/` (application files) | Application source — changes belong in `fs-cc` repository. |
+| `fs-enrs/backend/src/db/migrations/` | Database migrations are append-only. Never edit or delete existing migration files. |
+| `fs-cc/backend/db/migrations/` | Same as above. |
+| Container volumes | Do not delete Docker volumes while the system is running. |
+
+---
+
+## ⚠ Security Warnings
+
+> **NEVER deploy with example or placeholder passwords.**
+>
+> Every value marked `(REQUIRED)` in `.env.example` must be replaced with a real secret before starting the system. The backend startup code contains guards that refuse to start if example values (`CHANGE_ME_*`, `CHANGE-IN-PRODUCTION`, `changeme`) are detected.
+>
+> **Never commit `deploy/.env` to any git repository.** The `.gitignore` already excludes it. Check before every `git add`.
+
+---
+
 ## Known Limitations
 
 | Item | Detail |
-|------|--------|
-| CC migration | `post-install.sh` checks DB state first — skips migration if schema already exists; safe to re-run |
-| ENRS request logging | Every request logged to stdout — hardcoded in `server.js` |
+|---|---|
+| ENRS request logging | Every request is logged to stdout — expected behaviour; adjust `LOG_LEVEL` in `.env` |
 | Redis eviction | `allkeys-lru` can evict ENRS rate-limit counters under pressure |
 | Let's Encrypt ACME | Use `--standalone` for initial issue; `--webroot -w deploy/ssl/acme` for renewals |
+| Agent Desktop | Requires WebSocket connectivity — proxy/load-balancer must support WebSocket upgrades |

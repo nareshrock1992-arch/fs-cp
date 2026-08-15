@@ -1,18 +1,12 @@
 #!/usr/bin/env bash
 # post-install.sh
-# One-time post-deployment tasks for the Omni platform.
+# Post-deployment validation script for the Omni platform.
 #
-# Run ONCE after "docker compose up -d".
-# This script is safe to re-run — it checks before migrating.
+# Run after "docker compose up -d" to verify that all services are healthy
+# and that both databases were initialized correctly.
 #
-# Bootstrap sequence (why this order matters):
-#   1. PostgreSQL must be healthy before any migration can run.
-#   2. CC migration runs via "docker compose exec cc-backend node db/init.js".
-#      cc-backend must be healthy (running) before we can exec into it.
-#   3. ENRS migrations auto-run inside the container entrypoint before
-#      server.js starts. We wait for enrs-backend to become healthy, which
-#      only happens AFTER migrations have succeeded and the server is up.
-#   4. Health endpoint probes confirm both backends are serving requests.
+# Both CC and ENRS now run migrations + admin bootstrap automatically in their
+# container entrypoints — this script only waits, validates, and reports.
 #
 # Usage (from any directory):
 #   bash deploy/scripts/post-install.sh
@@ -61,9 +55,8 @@ CC_DB_NAME=$(parse_var CC_DB_NAME)
 CC_DB_NAME="${CC_DB_NAME:-fs_cc}"
 ENRS_DB_NAME=$(parse_var ENRS_DB_NAME)
 ENRS_DB_NAME="${ENRS_DB_NAME:-fs_enrs}"
-SEED_EMAIL=$(parse_var SEED_ADMIN_EMAIL)
-CC_ADMIN_PASSWORD=$(parse_var CC_ADMIN_PASSWORD)
-CC_ADMIN_PASSWORD="${CC_ADMIN_PASSWORD:-admin123}"
+CC_ADMIN_USERNAME=$(parse_var CC_INITIAL_ADMIN_USERNAME)
+ENRS_ADMIN_EMAIL=$(parse_var INITIAL_ADMIN_EMAIL)
 CC_API_BASE=$(parse_var CC_API_BASE)
 ENRS_API_BASE=$(parse_var ENRS_API_BASE)
 
@@ -89,7 +82,6 @@ ${COMPOSE} version &>/dev/null 2>&1 || COMPOSE="docker-compose"
 
 # ---------------------------------------------------------------------------
 # Helper: resolve a service to its running container ID via compose.
-# Works whether docker-compose.yml uses explicit container_name or not.
 # ---------------------------------------------------------------------------
 container_id() {
   local SVC="$1"
@@ -146,59 +138,41 @@ step "PostgreSQL"
 wait_healthy "postgres"
 
 # ---------------------------------------------------------------------------
-# Step 2: Wait for CC backend — then run CC migration if needed
+# Step 2: Wait for CC backend
 #
-# ORDERING: CC migration must happen before we wait for enrs-backend.
-# The CC backend starts cleanly even without a schema (no validateSchema()
-# call at boot), so it becomes healthy quickly. We then exec the migration
-# inside the container. This avoids any dependency on enrs-backend.
+# The CC entrypoint (docker-entrypoint.sh) automatically runs:
+#   1. scripts/migrate.js — applies any unapplied migrations
+#   2. scripts/seed-initial-admin.js — creates the first admin if none exists
+#
+# The container does not become healthy until all of the above succeed and
+# server.js is listening on /api/health.
+# Allow 90 s: 60 s start_period in compose + 30 s polling buffer.
 # ---------------------------------------------------------------------------
-step "Contact Center database migration"
+step "Contact Center backend (auto-migration + bootstrap in entrypoint)"
 wait_healthy "cc-backend" 90
 
-TABLE_COUNT=$(${COMPOSE} exec -T postgres \
+CC_TABLES=$(${COMPOSE} exec -T postgres \
   psql -U "${POSTGRES_ADMIN_USER}" -d "${CC_DB_NAME}" -t -c \
   "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='public';" \
   2>/dev/null | tr -d ' \n' || echo "0")
 
-if [[ "${TABLE_COUNT}" =~ ^[0-9]+$ ]] && [[ "${TABLE_COUNT}" -gt 0 ]]; then
-  success "CC schema already exists (${TABLE_COUNT} tables) — skipping migration"
+if [[ "${CC_TABLES}" =~ ^[0-9]+$ ]] && [[ "${CC_TABLES}" -gt 0 ]]; then
+  success "CC schema ready (${CC_TABLES} tables)"
 else
-  info "Running CC database migration inside cc-backend container ..."
-  ${COMPOSE} exec -T cc-backend node db/init.js \
-    && success "CC database schema created" \
-    || die "CC migration failed.\n       Diagnose with: docker compose logs cc-backend"
+  die "CC has no tables — migration did not run.\n       Check: docker compose logs cc-backend"
 fi
-
-# ---------------------------------------------------------------------------
-# Step 2b: Seed CC initial user accounts
-#
-# seedUsers.js uses ON CONFLICT DO NOTHING — safe to re-run; existing
-# accounts (with changed passwords) are never overwritten.
-# CC_ADMIN_PASSWORD is passed as an env var so the admin password is
-# configurable without modifying the script.
-# ---------------------------------------------------------------------------
-step "Contact Center initial users"
-
-info "Seeding CC admin and supervisor accounts (existing accounts unchanged) ..."
-${COMPOSE} exec -T \
-  -e CC_ADMIN_PASSWORD="${CC_ADMIN_PASSWORD}" \
-  cc-backend node /app/scripts/seedUsers.js \
-  && success "CC accounts ready" \
-  || die "CC user seeding failed.\n       Diagnose with: docker compose logs cc-backend"
 
 # ---------------------------------------------------------------------------
 # Step 3: Wait for ENRS backend
 #
-# The ENRS backend runs migrations automatically in docker-entrypoint.sh
-# before starting server.js. Waiting for 'healthy' here guarantees that:
-#   a) migrate.js completed successfully (otherwise the container would not
-#      have started, and would be restarting — never becoming healthy), AND
-#   b) server.js passed validateSchema() and is listening on /health/ready.
+# The ENRS entrypoint (docker-entrypoint.sh) automatically runs:
+#   1. src/db/migrate.js — applies all pending migrations
+#   2. src/db/seed-initial-admin.js — creates SUPER_ADMIN if none exists
 #
+# Waiting for 'healthy' guarantees both completed without error.
 # Allow 180 s: 120 s start_period in compose + 60 s polling buffer.
 # ---------------------------------------------------------------------------
-step "ENRS backend (auto-migration in entrypoint)"
+step "ENRS backend (auto-migration + bootstrap in entrypoint)"
 wait_healthy "enrs-backend" 180
 
 ENRS_TABLES=$(${COMPOSE} exec -T postgres \
@@ -248,13 +222,21 @@ echo -e "  ENRS            → ${BLUE}https://${SERVER_NAME}/enrs/${NC}"
 echo ""
 echo -e "${BOLD}  ENRS Admin Login${NC}"
 echo "  ─────────────────────────────────────────────"
-echo "  Email:    ${SEED_EMAIL}"
-echo "  Password: (as set in SEED_ADMIN_PASSWORD in .env)"
+if [[ -n "${ENRS_ADMIN_EMAIL}" ]]; then
+  echo "  Email:    ${ENRS_ADMIN_EMAIL}"
+else
+  echo "  Email:    (see INITIAL_ADMIN_EMAIL in .env, or check enrs-backend logs)"
+fi
+echo "  Password: (as set in INITIAL_ADMIN_PASSWORD in .env)"
 echo ""
 echo -e "${BOLD}  CC Admin Login${NC}"
 echo "  ─────────────────────────────────────────────"
-echo "  Username: admin"
-echo "  Password: (as set in CC_ADMIN_PASSWORD in .env)"
+if [[ -n "${CC_ADMIN_USERNAME}" ]]; then
+  echo "  Username: ${CC_ADMIN_USERNAME}"
+else
+  echo "  Username: (see CC_INITIAL_ADMIN_USERNAME in .env, or check cc-backend logs)"
+fi
+echo "  Password: (as set in CC_INITIAL_ADMIN_PASSWORD in .env)"
 echo ""
 warn "Change all default passwords immediately after first login."
 echo ""

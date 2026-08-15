@@ -13,11 +13,11 @@
 #   docker compose ps                 # status + health
 #   docker compose logs -f <service>  # tail logs for one service
 #
-# After first deploy, run the post-install script (handles CC migration):
+# After first deploy, run the post-install script (optional — for CC queue XML setup):
 #   bash deploy/scripts/post-install.sh
 #
-# ENRS migrations run automatically in the container entrypoint (idempotent).
-# CC migrations run once via post-install.sh (the script skips them on re-run).
+# Migrations + admin bootstrap run automatically in each container's entrypoint (idempotent).
+# Both ENRS and CC check for an existing admin and skip creation on subsequent starts.
 ###############################################################################
 
 name: ${COMPOSE_PROJECT_NAME:-omni}
@@ -185,6 +185,11 @@ services:
       # Socket.IO — must match VITE_SOCKET_PATH build arg in cc-frontend and agent-desktop
       SOCKET_PATH: ${CC_SOCKET_PATH}
 
+      # First-boot admin bootstrap (used only if no admin user exists in the CC DB).
+      # Leave unset after first deploy — the entrypoint exits immediately if one exists.
+      CC_INITIAL_ADMIN_USERNAME: ${CC_INITIAL_ADMIN_USERNAME}
+      CC_INITIAL_ADMIN_PASSWORD: ${CC_INITIAL_ADMIN_PASSWORD}
+
     depends_on:
       postgres:
         condition: service_healthy
@@ -193,7 +198,7 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     logging:
       driver: json-file
       options: { max-size: "100m", max-file: "5" }
@@ -301,9 +306,11 @@ services:
       # Socket.IO path — must match VITE_SOCKET_PATH build arg in enrs-frontend
       SOCKET_PATH: ${ENRS_SOCKET_PATH}
 
-      # First-boot admin user (ENRS only — CC has its own user system)
-      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
-      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      # First-boot SUPER_ADMIN bootstrap (used only if no SUPER_ADMIN exists in the DB).
+      # Leave unset after first deploy — the entrypoint exits immediately if one exists.
+      INITIAL_ADMIN_EMAIL: ${INITIAL_ADMIN_EMAIL}
+      INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
+      INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-System Administrator}
 
     depends_on:
       postgres:
