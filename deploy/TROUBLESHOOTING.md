@@ -181,7 +181,11 @@ Resolve the upstream issue first, then nginx will start automatically once all u
 docker compose logs nginx
 ```
 
-Check for duplicate directive errors (e.g., `proxy_buffering` defined twice). The nginx configuration includes `snippets/proxy.conf` into every location block — any directive in that file must not be repeated in individual location blocks.
+Check for duplicate directive errors (e.g., `proxy_read_timeout` defined twice). The nginx configuration uses two proxy snippets:
+- `snippets/proxy.conf` — included in all regular proxy location blocks (60 s read timeout)
+- `snippets/socketio-proxy.conf` — included in Socket.IO location blocks only (3600 s read timeout, buffering off)
+
+Any directive present in an included snippet must **not** be repeated inline in the same location block.
 
 ### 502 Bad Gateway
 

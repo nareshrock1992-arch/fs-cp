@@ -170,17 +170,13 @@ server {
     # SOCKET_PATH on cc-backend = /cc/socket.io (set via SOCKET_PATH env var)
     # VITE_SOCKET_PATH for cc-frontend and agent-desktop = /cc/socket.io
     location /cc/socket.io {
-        include /etc/nginx/snippets/proxy.conf;
-        proxy_buffering    off;
-        proxy_read_timeout 3600s;
+        include /etc/nginx/snippets/socketio-proxy.conf;
         proxy_pass http://cc_backend/cc/socket.io;
     }
 
     # ── ENRS Socket.IO — WebSocket upgrade ──────────────────────────────────────
     location /enrs/socket.io {
-        include /etc/nginx/snippets/proxy.conf;
-        proxy_buffering    off;
-        proxy_read_timeout 3600s;
+        include /etc/nginx/snippets/socketio-proxy.conf;
         proxy_pass http://enrs_backend/enrs/socket.io;
     }
 
