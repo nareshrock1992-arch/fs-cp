@@ -1,6 +1,6 @@
 const TONE = {
   default: {
-    circle: 'bg-gray-100 dark:bg-slate-700/60 text-gray-500 dark:text-slate-300',
+    circle: 'bg-gray-100 dark:bg-panel-raised text-gray-500 dark:text-ink-dim',
     value:  'text-gray-900 dark:text-ink',
     card:   '',
   },

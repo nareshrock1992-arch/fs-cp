@@ -48,7 +48,7 @@ function IvrSection({ title, subtitle, rows, labelKey, labelHeader, color }) {
         <tbody className="divide-y dark:divide-panel-border divide-gray-100">
           {rows.map(r => (
             <tr key={r[labelKey]}
-              className="hover:dark:bg-panel-raised/30 hover:bg-gray-50 transition-colors">
+              className="dark:hover:bg-panel-raised/30 hover:bg-gray-50 transition-colors">
               <td className={`py-2 font-medium font-mono tnum ${color}`}>
                 {r[labelKey] || '(unknown)'}
               </td>
@@ -190,7 +190,7 @@ export default function Reports() {
                 download
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded
                   dark:bg-panel-border/60 bg-gray-100 dark:text-ink-dim text-gray-600
-                  hover:dark:bg-panel-border hover:bg-gray-200 transition-colors"
+                  dark:hover:bg-panel-border hover:bg-gray-200 transition-colors"
               >
                 <Download size={12} />
                 {label}

@@ -42,8 +42,8 @@ function AdminMenu({ user }) {
       <button
         onClick={() => setOpen(v => !v)}
         className={`flex items-center gap-2 rounded-lg px-2 py-1.5 transition-colors
-          hover:bg-panel-raised border border-transparent
-          ${open ? 'border-panel-border bg-panel-raised' : ''}`}
+          hover:bg-gray-100 dark:hover:bg-panel-raised border border-transparent
+          ${open ? 'border-gray-200 dark:border-panel-border bg-gray-100 dark:bg-panel-raised' : ''}`}
       >
         <div className="h-8 w-8 rounded-full bg-brand flex items-center justify-center
           text-white text-xs font-bold shadow-lamp-blue shrink-0">
@@ -172,7 +172,7 @@ export default function Topbar({ isDark, toggleTheme }) {
             border dark:border-panel-border border-gray-200
             dark:bg-panel-raised bg-gray-50
             dark:text-ink-faint text-gray-500
-            hover:dark:text-ink hover:text-gray-900
+            dark:hover:text-ink hover:text-gray-900
             dark:hover:bg-panel-border hover:bg-gray-100 transition-colors"
           aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
         >

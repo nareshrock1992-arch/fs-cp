@@ -239,7 +239,7 @@ export default function UserManagement() {
 
 
         {error && (
-          <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
             {error}
           </div>
         )}
@@ -361,7 +361,7 @@ export default function UserManagement() {
         }
       >
         {formErr && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <div className="mb-4 px-3 py-2 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
             {formErr}
           </div>
         )}
@@ -410,7 +410,7 @@ export default function UserManagement() {
         }
       >
         {formErr && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <div className="mb-4 px-3 py-2 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
             {formErr}
           </div>
         )}
@@ -449,7 +449,7 @@ export default function UserManagement() {
         }
       >
         {formErr && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <div className="mb-4 px-3 py-2 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
             {formErr}
           </div>
         )}
@@ -500,7 +500,7 @@ export default function UserManagement() {
         }
       >
         {formErr && (
-          <div className="mb-4 px-3 py-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+          <div className="mb-4 px-3 py-2 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
             {formErr}
           </div>
         )}

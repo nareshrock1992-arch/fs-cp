@@ -5,7 +5,7 @@ export default function Modal({ open, title, onClose, children, footer }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
       <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative w-full max-w-lg rounded border dark:border-panel-border border-gray-200 dark:bg-panel-surface bg-white shadow-2xl">
+      <div className="relative w-full max-w-lg rounded-xl border dark:border-panel-border border-gray-200 dark:bg-panel-surface bg-white shadow-2xl">
         <div className="flex items-center justify-between px-5 py-4 border-b dark:border-panel-border border-gray-100">
           <h3 className="font-display font-semibold text-sm tracking-wide dark:text-ink text-gray-800">
             {title}

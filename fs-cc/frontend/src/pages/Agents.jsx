@@ -16,6 +16,12 @@ const EMPTY_FORM = {
 
 const STATUS_OPTIONS = ['Available', 'On Break', 'Logged Out'];
 
+const STATUS_SELECT = {
+  'Available':  { dot: 'bg-lamp-available', cls: 'border-emerald-300 dark:border-emerald-500/40 text-emerald-700 dark:text-lamp-available' },
+  'On Break':   { dot: 'bg-lamp-live',      cls: 'border-amber-300  dark:border-amber-500/40  text-amber-700  dark:text-lamp-live'      },
+  'Logged Out': { dot: 'bg-lamp-alert',     cls: 'border-red-300    dark:border-red-500/40    text-red-600    dark:text-lamp-alert'     },
+};
+
 export default function Agents() {
   const { user } = useAuth();
   const isAdmin        = user?.role === 'admin';
@@ -303,20 +309,25 @@ export default function Agents() {
 
                   {/* Status */}
                   <td className="px-4 py-3">
-                    {canChangeState ? (
-                      <select
-                        value={a.status || ''}
-                        onChange={(e) => handleStatusChange(a.agent_id, e.target.value)}
-                        className="text-xs rounded-lg border border-gray-200 dark:border-panel-border
-                                   bg-white dark:bg-panel-raised text-gray-700 dark:text-ink-dim
-                                   px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-brand/40
-                                   focus:border-brand/60 transition-colors"
-                      >
-                        {STATUS_OPTIONS.map((s) => (
-                          <option key={s} value={s} className="dark:bg-panel-surface bg-white">{s}</option>
-                        ))}
-                      </select>
-                    ) : (
+                    {canChangeState ? (() => {
+                      const sc = STATUS_SELECT[a.status] ?? STATUS_SELECT['Logged Out'];
+                      return (
+                        <div className="inline-flex items-center gap-1.5">
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${sc.dot}`} aria-hidden="true" />
+                          <select
+                            value={a.status || ''}
+                            onChange={(e) => handleStatusChange(a.agent_id, e.target.value)}
+                            className={`text-xs rounded-lg border px-2 py-1.5 bg-white dark:bg-panel-raised
+                                        focus:outline-none focus:ring-2 focus:ring-brand/40 focus:border-brand/60
+                                        transition-colors cursor-pointer ${sc.cls}`}
+                          >
+                            {STATUS_OPTIONS.map((s) => (
+                              <option key={s} value={s} className="dark:bg-panel-surface bg-white text-gray-800 dark:text-ink">{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                      );
+                    })() : (
                       <StatusLamp status={a.status} variant="badge" />
                     )}
                   </td>

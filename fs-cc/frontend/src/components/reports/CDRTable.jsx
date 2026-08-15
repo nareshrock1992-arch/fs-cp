@@ -31,10 +31,10 @@ function shortUuid(uuid) {
 // ── Disposition badge ─────────────────────────────────────────────────────────
 
 const DISP = {
-  answered:        { label: 'ANSWERED',       cls: 'bg-emerald-100 text-emerald-700 ring-1 ring-emerald-200' },
-  abandoned_agent: { label: 'MISSED (AGENT)', cls: 'bg-orange-100  text-orange-700  ring-1 ring-orange-200'  },
-  abandoned_queue: { label: 'ABANDONED',      cls: 'bg-red-100     text-red-700     ring-1 ring-red-200'     },
-  waiting:         { label: 'WAITING',        cls: 'bg-gray-100    text-gray-500    ring-1 ring-gray-200'    },
+  answered:        { label: 'ANSWERED',       cls: 'bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 ring-1 ring-emerald-200 dark:ring-emerald-500/25' },
+  abandoned_agent: { label: 'MISSED (AGENT)', cls: 'bg-orange-100 dark:bg-orange-500/15 text-orange-700 dark:text-orange-400 ring-1 ring-orange-200 dark:ring-orange-500/25' },
+  abandoned_queue: { label: 'ABANDONED',      cls: 'bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-400 ring-1 ring-red-200 dark:ring-red-500/25' },
+  waiting:         { label: 'WAITING',        cls: 'bg-gray-100 dark:bg-panel-raised text-gray-500 dark:text-ink-dim ring-1 ring-gray-200 dark:ring-panel-border' },
 };
 
 function DispositionBadge({ value }) {
@@ -199,7 +199,7 @@ export default function CDRTable({ from, to }) {
 
       {/* ── Error ── */}
       {error && (
-        <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-700">
+        <div className="mx-6 mt-4 px-4 py-3 rounded-lg bg-lamp-alert/10 border border-lamp-alert/25 text-sm text-lamp-alert">
           {error}
         </div>
       )}

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Plus, Pencil, Trash2, Users2, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, Users2, X, Layers } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth.js';
 import { Queues as QueuesApi, Agents as AgentsApi } from '../api/client.js';
 import Panel from '../components/Panel.jsx';
 import Modal from '../components/Modal.jsx';
 import StatusLamp from '../components/StatusLamp.jsx';
+import EmptyState from '../components/EmptyState.jsx';
 import { FormField, inputClass, buttonPrimary, buttonSecondary } from '../components/form.jsx';
 
 const STRATEGIES = [
@@ -132,7 +133,7 @@ export default function Queues() {
         {loading && <p className="text-sm dark:text-ink-dim text-gray-500">Loading queues…</p>}
         {error   && <p className="text-sm text-lamp-alert">{error}</p>}
         {!loading && !error && queues.length === 0 && (
-          <p className="text-sm dark:text-ink-dim text-gray-500">No queues configured yet.</p>
+          <EmptyState icon={Layers} title="No queues configured yet" body="Add a queue to start routing calls." />
         )}
         {!loading && !error && queues.length > 0 && (
           <table className="w-full text-sm">
@@ -161,16 +162,16 @@ export default function Queues() {
                     <td className="py-3">
                       <div className="flex justify-end gap-1.5">
                         <button onClick={() => openTiers(q.name)}
-                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors"
+                          className="p-1.5 rounded-lg dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors"
                           title="Manage agents">
                           <Users2 size={14} />
                         </button>
                         <button onClick={() => openEdit(q)}
-                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors">
+                          className="p-1.5 rounded-lg dark:text-ink-dim text-gray-400 hover:text-gray-800 dark:hover:text-ink hover:bg-gray-100 dark:hover:bg-panel-raised transition-colors">
                           <Pencil size={14} />
                         </button>
                         <button onClick={() => handleDelete(q.name)}
-                          className="p-1.5 rounded-sm dark:text-ink-dim text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
+                          className="p-1.5 rounded-lg dark:text-ink-dim text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
                           <Trash2 size={14} />
                         </button>
                       </div>
@@ -264,7 +265,7 @@ export default function Queues() {
                 )}
                 {tierQueue.agents.map((a) => (
                   <div key={a.agent_id}
-                    className="flex items-center justify-between rounded-sm border dark:border-panel-border border-gray-200 px-3 py-2">
+                    className="flex items-center justify-between rounded-lg border dark:border-panel-border border-gray-200 px-3 py-2">
                     <div className="flex items-center gap-3">
                       <StatusLamp status={a.status} showLabel={false} />
                       <div>
@@ -275,7 +276,7 @@ export default function Queues() {
                       </div>
                     </div>
                     <button onClick={() => handleRemoveTier(a.agent_id)}
-                      className="p-1 rounded-sm dark:text-ink-faint text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
+                      className="p-1 rounded-lg dark:text-ink-faint text-gray-400 hover:text-lamp-alert hover:bg-lamp-alert/10 transition-colors">
                       <X size={14} />
                     </button>
                   </div>
