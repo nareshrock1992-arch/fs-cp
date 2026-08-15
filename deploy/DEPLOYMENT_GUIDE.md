@@ -98,8 +98,11 @@ openssl rand -base64 24
 | `JWT_ACCESS_SECRET` | `openssl rand -hex 32` |
 | `JWT_REFRESH_SECRET` | `openssl rand -hex 32` — must differ from `JWT_ACCESS_SECRET` |
 | `INTERNAL_API_KEY` | `openssl rand -hex 32` |
-| `SEED_ADMIN_PASSWORD` | Strong password for ENRS admin |
-| `CC_ADMIN_PASSWORD` | Password for the CC `admin` account (set before first run; default `admin123`) |
+| `INITIAL_ADMIN_EMAIL` | Email address for the ENRS platform administrator account (created on first boot only) |
+| `INITIAL_ADMIN_PASSWORD` | Password for the ENRS admin (≥8 chars, upper + lower + digit + special) |
+| `INITIAL_ADMIN_NAME` | Display name (default: `System Administrator`) |
+| `CC_INITIAL_ADMIN_USERNAME` | Username for the Contact Center administrator (3–64 chars: letters, digits, `.`, `_`, `-`) |
+| `CC_INITIAL_ADMIN_PASSWORD` | Password for the CC administrator (min 8 chars) |
 | All `FS_*` paths | Must match your FreeSWITCH installation |
 
 **Find your FreeSWITCH paths:**
@@ -176,18 +179,6 @@ cd /opt/omni/deploy
 docker compose build
 docker compose up -d
 ```
-##############################
-Toload the docker images 
-
-docker load -i omni-nginx.tar
-docker load -i omni-enrs-backend.tar
-docker load -i omni-cc-backend.tar
-docker load -i omni-cc-frontend.tar
-docker load -i omni-enrs-frontend.tar
-docker load -i omni-agent-desktop.tar
-docker load -i postgres.tar
-docker load -i redis.tar
-
 
 Wait for all containers to be healthy. On a fresh install, the ENRS backend runs database migrations before starting — this takes 1–3 minutes. Subsequent starts (existing database) complete in under 30 seconds.
 
@@ -223,14 +214,16 @@ This single command:
 
 > The script is safe to re-run. All steps check state before acting.
 
-**CC accounts created on first run:**
+**Accounts created automatically on first run:**
 
-| Username | Password | Role |
-|----------|----------|------|
-| `admin` | value of `CC_ADMIN_PASSWORD` in `.env` (default: `admin123`) | Admin |
-| `supervisor` | `super123` | Supervisor |
+| Application | Username / Email | Password | Role |
+|-------------|-----------------|----------|------|
+| ENRS | `INITIAL_ADMIN_EMAIL` from `.env` | `INITIAL_ADMIN_PASSWORD` from `.env` | SUPER_ADMIN |
+| CC | `CC_INITIAL_ADMIN_USERNAME` from `.env` | `CC_INITIAL_ADMIN_PASSWORD` from `.env` | Admin |
 
-> Change these passwords immediately after first login.
+> These accounts are created **only if no administrator exists** in that database. On subsequent deploys the bootstrap exits immediately — existing accounts are never modified.
+
+> **Change all passwords immediately after first login** using each application's user management interface. Editing `.env` after the first boot has no effect on existing accounts.
 
 ---
 
@@ -254,13 +247,11 @@ Open these URLs in a browser. Accept the self-signed certificate warning (Phase 
 | Agent Desktop | `https://<SERVER_NAME>/agent/` |
 | ENRS | `https://<SERVER_NAME>/enrs/` |
 
-**ENRS admin credentials:** `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` from `deploy/.env`.
+**ENRS credentials (first login):** email = `INITIAL_ADMIN_EMAIL`, password = `INITIAL_ADMIN_PASSWORD` from `deploy/.env`.
 
-**CC admin credentials:** `admin` / `CC_ADMIN_PASSWORD` from `deploy/.env` (default: `admin123`).
+**CC credentials (first login):** username = `CC_INITIAL_ADMIN_USERNAME`, password = `CC_INITIAL_ADMIN_PASSWORD` from `deploy/.env`.
 
-**Change all default passwords immediately after first login.**
-
-> `CC_ADMIN_PASSWORD` in `.env` is only used when creating the account on first run. To change the CC admin password after that, use the CC application's user management interface — editing `.env` has no effect on existing accounts.
+**Change all passwords immediately after first login** using each application's built-in user management. Editing `.env` after the first boot has no effect on existing accounts.
 
 ---
 
@@ -331,28 +322,45 @@ Manually verify each item. Mark PASS or FAIL.
 
 ---
 
-## ENRS Bootstrap Behaviour
+## Backend Bootstrap Behaviour
 
-Understanding how the ENRS backend starts prevents confusion during the first deployment.
+Understanding how the backends start prevents confusion on first deployment.
 
-### What happens on every container start
+### Startup sequence — both backends
 
-The ENRS backend uses a custom Docker entrypoint (`docker-entrypoint.sh`) that runs before `server.js`:
+Both the ENRS backend and the CC backend run an identical three-step sequence on every container start:
 
-1. `docker-entrypoint.sh` runs `node src/db/migrate.js`
-2. `migrate.js` checks the `schema_migrations` table to find which files have already been applied
-3. **Fresh database:** applies `schema.sql` (the base schema) then all numbered migration files in order
-4. **Existing database:** skips already-applied files; applies only new ones (idempotent)
-5. `migrate.js` exits 0 → entrypoint calls `exec node server.js`
-6. `server.js` calls `validateSchema()` to confirm required tables exist, then opens the HTTP server
+```
+container start
+      ↓
+docker-entrypoint.sh runs
+      ↓
+  1. Database migration (idempotent — safe on every boot)
+      ↓
+  2. Administrator bootstrap (exits immediately if any admin already exists)
+      ↓
+  3. exec node server.js (application starts)
+      ↓
+healthcheck passes → container marked (healthy)
+```
 
-If `migrate.js` exits non-zero (database not ready, SQL error), the entrypoint exits with the same code. Docker's `restart: unless-stopped` policy retries the full sequence — including migrations — on every restart.
+**Step-by-step:**
 
-### Why the start_period is 120 seconds
+1. Docker starts the container and runs `docker-entrypoint.sh` as PID 1 (via tini).
+2. The entrypoint runs migrations:
+   - **Fresh database:** creates the full schema and applies all numbered migration files in order.
+   - **Existing database:** skips already-applied files; applies only new ones.
+3. If migration fails (database not reachable, SQL error), the container exits non-zero. Docker retries automatically — this is correct behaviour for a transient startup-order issue.
+4. The entrypoint runs the admin bootstrap script:
+   - **ENRS:** checks for an existing `SUPER_ADMIN` user. If none, creates one from `INITIAL_ADMIN_EMAIL` / `INITIAL_ADMIN_PASSWORD`. If one exists, exits 0 immediately.
+   - **CC:** checks for an existing admin user. If none, creates one from `CC_INITIAL_ADMIN_USERNAME` / `CC_INITIAL_ADMIN_PASSWORD`. If one exists, exits 0 immediately.
+5. `exec node server.js` — the application starts.
 
-The first-boot migration applies `schema.sql` plus up to 15+ numbered migration files. On a production server this takes 30–90 seconds. The `start_period: 120s` in `docker-compose.yml` means the health check does not count failures during this window — the container is not marked unhealthy while migrations are running.
+### Why the healthcheck start_period is 60 seconds
 
-Subsequent restarts skip all already-applied migrations and complete in ~2–5 seconds.
+The first-boot migration applies the base schema and all migration files. On a production server this takes 20–60 seconds. The `start_period: 60s` means the healthcheck does not count failures during this window — the container is not marked unhealthy while migrations and bootstrap are running.
+
+Subsequent restarts (existing database) skip all already-applied migrations and complete in ~2–5 seconds.
 
 ### Recovery from migration failure
 
