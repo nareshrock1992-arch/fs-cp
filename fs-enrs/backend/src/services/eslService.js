@@ -1742,18 +1742,49 @@ export async function originateCampaignCall({
   timeout = 30,
 }) {
   let resolved;
+  let resolvedGateway = null;
   try {
-    resolved = dialString || (await resolveDialString({
-      tenantId, contactId, mobileNumber: number, gatewayId, gatewayName,
-    })).dialString;
+    if (dialString) {
+      resolved = dialString;
+      // Pre-resolved dial string — no gateway object available; PAI domain falls back to config.
+    } else {
+      const r = await resolveDialString({
+        tenantId, contactId, mobileNumber: number, gatewayId, gatewayName,
+      });
+      resolved        = r.dialString;
+      resolvedGateway = r.gateway;
+    }
   } catch (resolveErr) {
     throw resolveErr;
   }
 
+  // ENS outbound identity: source is always the configured blast_clid (via clid param).
+  // clid must be non-empty — callers must validate before invoking (campaignEngine guards
+  // this at both createCampaignByConfigId and dispatchReadyDestinations).
+  // Falling back to `number` (the destination phone) would make the call appear to originate
+  // FROM the person being called — that is never correct.
+  if (!clid || !String(clid).trim()) {
+    throw new Error('originateCampaignCall: clid (blast_clid) is required — refusing to originate with empty caller identity');
+  }
+  const ensCli = String(clid).trim();
+
+  // SIP domain for P-Asserted-Identity: per-gateway sip_domain takes priority,
+  // then the global FS_SIP_DOMAIN env var. PAI is omitted when neither is set.
+  const sipDomain = resolvedGateway?.sip_domain || config.freeswitch.sipDomain || '';
+
+  // origination_* sets the channel's initial caller-ID.
+  // effective_* is read by FreeSWITCH for From URI (when caller-id-in-from=true) and
+  // by some gateway configs for PAI auto-generation (sip_cid_type=pai).
+  // sip_h_P-Asserted-Identity sets the PAI header directly — this overrides any
+  // gateway-level PAI generation and is the only reliable way to deliver a valid
+  // enterprise extension to Avaya SM when caller-id-in-from=false on the gateway.
   const varParts = {
     origination_uuid:             callUuid,
-    origination_caller_id_number: clid || number,
+    origination_caller_id_number: ensCli,
     origination_caller_id_name:   'Emergency',
+    effective_caller_id_number:   ensCli,
+    effective_caller_id_name:     'Emergency',
+    ...(sipDomain ? { 'sip_h_P-Asserted-Identity': `<sip:${ensCli}@${sipDomain}>` } : {}),
     ignore_early_media:           'true',
     originate_timeout:            String(timeout),
     enrs_campaign_id:             String(campaignId),
