@@ -10,7 +10,10 @@ import EmptyState from '../components/EmptyState.jsx';
 import { FormField, inputClass, buttonPrimary, buttonSecondary } from '../components/form.jsx';
 
 const EMPTY_FORM = {
-  agentId: '', fullName: '', avayaExtension: '', contact: '',
+  agentId: '', fullName: '', avayaExtension: '',
+  // Structured contact fields — backend builds the full contact string server-side.
+  // agentType: 'internal' → extension field shown; 'gateway' → gateway + destination shown.
+  agentType: 'internal', extension: '', gateway: '', destination: '',
   maxNoAnswer: 3, wrapUpTime: 20, rejectDelayTime: 2, busyDelayTime: 60
 };
 
@@ -99,11 +102,34 @@ export default function Agents() {
 
   function openEdit(agent) {
     setEditingId(agent.agent_id);
+    // Reconstruct structured fields from the stored contact string for display.
+    // The backend always stores the canonical form: {sip_cid_type=pid}<endpoint>
+    const contact = agent.contact || '';
+    const endpoint = contact.replace(/^(\{[^}]*\})+/, ''); // strip prefix blocks
+    const isInternal = endpoint.startsWith('user/');
+    const isGateway  = endpoint.startsWith('sofia/gateway/');
+
+    let extension   = '';
+    let gateway     = '';
+    let destination = '';
+    if (isInternal) {
+      // user/<ext>@<domain> → extract <ext>
+      extension = endpoint.replace(/^user\//, '').replace(/@.*$/, '');
+    } else if (isGateway) {
+      // sofia/gateway/<gw>/<dest> → extract parts
+      const parts = endpoint.replace('sofia/gateway/', '').split('/');
+      gateway     = parts[0] || '';
+      destination = parts[1] || '';
+    }
+
     setForm({
       agentId:         agent.agent_id,
       fullName:        agent.full_name,
       avayaExtension:  agent.avaya_extension,
-      contact:         agent.contact,
+      agentType:       agent.agent_type || (isGateway ? 'gateway' : 'internal'),
+      extension,
+      gateway,
+      destination,
       maxNoAnswer:     agent.max_no_answer,
       wrapUpTime:      agent.wrap_up_time,
       rejectDelayTime: agent.reject_delay_time,
@@ -437,15 +463,50 @@ export default function Agents() {
                 placeholder="5001"
               />
             </FormField>
-            <FormField label="Contact (SIP dial string)">
-              <input
-                required
-                value={form.contact}
-                onChange={(e) => setForm({ ...form, contact: e.target.value })}
+            <FormField label="Endpoint Type" hint="How FreeSWITCH dials this agent">
+              <select
+                value={form.agentType}
+                onChange={(e) => setForm({ ...form, agentType: e.target.value, extension: '', gateway: '', destination: '' })}
                 className={inputClass}
-                placeholder="sofia/gateway/avaya_gw/5001"
-              />
+              >
+                <option value="internal">Internal (SIP extension)</option>
+                <option value="gateway">Gateway (SIP trunk)</option>
+              </select>
             </FormField>
+            {form.agentType === 'internal' && (
+              <FormField label="Extension" hint="SIP extension number (e.g. 1002). Domain is set by server config.">
+                <input
+                  required
+                  type="tel"
+                  value={form.extension}
+                  onChange={(e) => setForm({ ...form, extension: e.target.value })}
+                  className={inputClass}
+                  placeholder="1002"
+                />
+              </FormField>
+            )}
+            {form.agentType === 'gateway' && (
+              <>
+                <FormField label="Gateway Name" hint="FreeSWITCH gateway name (e.g. service-provider)">
+                  <input
+                    required
+                    value={form.gateway}
+                    onChange={(e) => setForm({ ...form, gateway: e.target.value })}
+                    className={inputClass}
+                    placeholder="service-provider"
+                  />
+                </FormField>
+                <FormField label="Destination" hint="E.164 number or extension routed via the gateway">
+                  <input
+                    required
+                    value={form.destination}
+                    onChange={(e) => setForm({ ...form, destination: e.target.value })}
+                    className={inputClass}
+                    placeholder="0507221769"
+                  />
+                </FormField>
+              </>
+            )}
             <FormField label="Max No Answer">
               <input type="number" min="0" value={form.maxNoAnswer}
                 onChange={(e) => setForm({ ...form, maxNoAnswer: Number(e.target.value) })}

@@ -72,8 +72,8 @@ describe('Scenario 1 — utcDateRange: to omitted (uses today as default)', () =
     expect(fromArg).toBeInstanceOf(Date);
     expect(toArg).toBeInstanceOf(Date);
 
-    // from must be 2026-06-01T00:00:00Z
-    expect(fromArg.toISOString()).toBe('2026-06-01T00:00:00.000Z');
+    // from must be 2026-06-01 00:00:00 IST = 2026-05-31T18:30:00.000Z UTC
+    expect(fromArg.toISOString()).toBe('2026-05-31T18:30:00.000Z');
     // to must be today's date (just verify it's a valid future-ish Date)
     expect(isNaN(toArg.getTime())).toBe(false);
     expect(toArg >= fromArg).toBe(true);

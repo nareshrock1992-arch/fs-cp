@@ -51,8 +51,9 @@
  * ─────────
  * All timestamps stored as TIMESTAMPTZ (UTC). Date range boundaries passed from
  * the controller as JavaScript Date objects (always UTC-aware).
- * The existing dateRange() in reportsController uses local time — that bug is
- * NOT fixed here to avoid breaking existing reports. Phase 2 uses utcDateRange().
+ * Both controllers now use IST midnight boundaries. dateRange() in reportsController
+ * produces IST midnight via local-time parsing on the IST server (correct).
+ * utcDateRange() in agentReportController uses explicit +05:30 offset (also correct).
  */
 
 import { query } from '../db/pool.js';
@@ -253,7 +254,7 @@ export async function getStateDurations(from, to, agentId = null) {
  * @param {string|null}  agentId  — null = all agents
  */
 export async function getCallMetrics(from, to, agentId = null) {
-  const conditions = ['ah.ring_start BETWEEN $1 AND $2'];
+  const conditions = ['ah.ring_start >= $1', 'ah.ring_start < $2'];
   const params = [from, to];
 
   if (agentId) {

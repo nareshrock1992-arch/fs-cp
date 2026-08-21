@@ -70,7 +70,7 @@ describe('record_message Lua handler', () => {
     expect(lua).toContain('getVariable("uuid")');
     expect(lua).toContain('os.time()');
     expect(lua).toContain('.wav"');
-    expect(lua).toContain('"ivr_"');
+    expect(lua).toContain('"/ivr_"');
   });
 
   it('T4: plays prompt audio file when prompt_audio_url is configured', () => {
@@ -90,10 +90,13 @@ describe('record_message Lua handler', () => {
     expect(lua).toContain('tone_stream://%(500,0,640)');
   });
 
-  it('T7: uses execute("record") with # terminator for DTMF support', () => {
+  it('T7: uses execute("record") application (supports DTMF termination)', () => {
     const lua = getRecordEntry().luaHandler;
     expect(lua).toContain('s:execute("record"');
-    expect(lua).toContain('" #")');
+    // Stop key defaults to "#" when dtmf_stop_key is nil
+    expect(lua).toContain('or "#"');
+    // Stop key is read from node config (configurable, not hardcoded)
+    expect(lua).toContain('node.dtmf_stop_key');
   });
 
   it('T7b: does NOT use recordFile (which has no DTMF terminator support)', () => {
@@ -109,7 +112,7 @@ describe('record_message Lua handler', () => {
     // Verify defaults are safe fallbacks, not the only values
     expect(lua).toContain('or 60');
     expect(lua).toContain('or 500');
-    expect(lua).toContain('or 3');
+    expect(lua).toContain('or 20');
   });
 
   it('T9: stores recorded file path in session variable after recording', () => {
@@ -227,6 +230,16 @@ describe('record_message Zod schema', () => {
 
   it('T16: accepts full node with all parameters', () => {
     const r = AnyNodeSchema.safeParse(baseNode);
+    expect(r.success).toBe(true);
+  });
+
+  it('T16b: accepts node with explicit dtmf_stop_key', () => {
+    const r = AnyNodeSchema.safeParse({ ...baseNode, dtmf_stop_key: '#' });
+    expect(r.success).toBe(true);
+  });
+
+  it('T16c: accepts node with empty dtmf_stop_key (no DTMF termination)', () => {
+    const r = AnyNodeSchema.safeParse({ ...baseNode, dtmf_stop_key: '' });
     expect(r.success).toBe(true);
   });
 

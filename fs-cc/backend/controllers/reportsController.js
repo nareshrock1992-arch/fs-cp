@@ -74,7 +74,7 @@ export async function agentPerformance(req, res) {
   //   - calls_offered  = every row (agent was offered the call)
   //   - calls_answered = rows where missed=false AND talk_start IS NOT NULL
   //   - calls_missed   = rows where missed=true
-  //   - AHT            = avg(talk_seconds) for answered rows / 60 → minutes
+  //   - avg_talk_min   = avg(talk_seconds) for answered rows / 60 → minutes (NOT AHT; hold/wrap-up not observable)
   //   - total_talk     = sum(talk_seconds) for answered rows / 60 → minutes
   //
   // ring_start is used for date filtering (when the offer happened).
@@ -93,7 +93,7 @@ export async function agentPerformance(req, res) {
            / 60.0,
            0
          ), 2
-       )                                                                     AS aht_min,
+       )                                                                     AS avg_talk_min,
        ROUND(
          COALESCE(SUM(ah.talk_seconds) FILTER (WHERE ah.missed = false)::NUMERIC / 60.0, 0),
          2
@@ -267,7 +267,7 @@ export async function exportReport(req, res) {
          ROUND(COALESCE(
            SUM(ah.talk_seconds) FILTER (WHERE ah.missed=false)::NUMERIC
            / NULLIF(COUNT(*) FILTER (WHERE ah.missed=false AND ah.talk_start IS NOT NULL),0)
-           / 60.0, 0), 2) AS aht_min,
+           / 60.0, 0), 2) AS avg_talk_min,
          ROUND(COALESCE(SUM(ah.talk_seconds) FILTER (WHERE ah.missed=false)::NUMERIC/60.0,0),2) AS total_talk_min
        FROM agent_history ah
        LEFT JOIN agents a ON a.agent_id=ah.agent_id
@@ -277,7 +277,7 @@ export async function exportReport(req, res) {
       [from, to]
     );
     rows = r.rows;
-    columns = ['agent_id','full_name','calls_offered','calls_answered','calls_missed','aht_min','total_talk_min'];
+    columns = ['agent_id','full_name','calls_offered','calls_answered','calls_missed','avg_talk_min','total_talk_min'];
 
   } else if (type === 'call-volume') {
     const r = await query(

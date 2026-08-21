@@ -7,14 +7,14 @@
  * DATE RANGE CONTRACT
  * ────────────────────
  * All endpoints accept ISO-8601 query params:
- *   ?from=2026-06-01T00:00:00Z  (inclusive lower bound, UTC)
- *   ?to=2026-06-30T23:59:59Z    (inclusive upper bound, UTC)
+ *   ?from=2026-06-01  (inclusive lower bound, IST calendar day start)
+ *   ?to=2026-06-30    (inclusive upper bound, IST calendar day end)
  *
- * If omitted, defaults to the current calendar day in UTC (00:00:00–23:59:59).
- *
- * NOTE: The existing dateRange() in reportsController.js has a local-time
- * parsing bug. This controller uses utcDateRange() (defined here) which
- * always interprets bare dates as UTC midnight. Existing reports are untouched.
+ * If omitted, defaults to the current IST calendar day.
+ * Bare dates are interpreted as IST (Asia/Kolkata, +05:30) midnight.
+ * The server TZ is Asia/Kolkata; using +05:30 suffix produces the correct
+ * UTC equivalent of IST midnight, matching the reporting timezone used
+ * throughout the rest of the system (dateRange() in reportsController.js).
  */
 
 import * as svc from '../services/agentReportService.js';
@@ -22,22 +22,39 @@ import * as svc from '../services/agentReportService.js';
 // ── Date range helper ────────────────────────────────────────────────────────
 
 /**
- * Returns { from: Date, to: Date } parsed strictly as UTC.
- * Bare dates like "2026-06-01" are interpreted as "2026-06-01T00:00:00Z".
+ * Returns { from: Date, to: Date } using half-open IST calendar-day boundaries.
+ * Bare dates like "2026-06-01" are interpreted as IST midnight (+05:30).
  * Full ISO strings with Z/offset are used as-is.
+ * Uses a half-open interval: >= from AND < to (next day midnight).
  *
  * Validates both params are valid dates; throws 400 if not.
  */
 function utcDateRange(fromStr, toStr, res) {
+  const IST = '+05:30';
   const today = new Date();
-  const todayStr = today.toISOString().slice(0, 10); // "2026-08-10"
+  // Derive today in IST by formatting with local offset (server TZ = IST)
+  const todayStr = today.toLocaleDateString('sv').slice(0, 10); // "2026-08-10"
 
-  const fromRaw = fromStr ?? `${todayStr}T00:00:00Z`;
-  const toRaw   = toStr   ?? `${todayStr}T23:59:59Z`;
+  const fromRaw = fromStr ?? `${todayStr}`;
+  const toRaw   = toStr   ?? `${todayStr}`;
 
-  // Ensure bare dates get Z suffix so Date() treats them as UTC
-  const fromNorm = fromRaw.includes('T') ? fromRaw : `${fromRaw}T00:00:00Z`;
-  const toNorm   = toRaw.includes('T')   ? toRaw   : `${toRaw}T23:59:59Z`;
+  // Bare dates get IST midnight; full ISO strings with offset are used as-is
+  const fromNorm = fromRaw.includes('T') ? fromRaw : `${fromRaw}T00:00:00${IST}`;
+  // Half-open upper bound: next calendar day at IST midnight.
+  // Validate the parsed date before advancing it so invalid input falls through
+  // to the isNaN check below rather than throwing a RangeError.
+  let toNorm;
+  if (toRaw.includes('T')) {
+    toNorm = toRaw;
+  } else {
+    const toDate = new Date(`${toRaw}T00:00:00${IST}`);
+    if (!isNaN(toDate.getTime())) {
+      toDate.setDate(toDate.getDate() + 1);
+      toNorm = toDate.toISOString(); // next IST midnight expressed as UTC
+    } else {
+      toNorm = toRaw; // invalid — will be caught by the isNaN check below
+    }
+  }
 
   const from = new Date(fromNorm);
   const to   = new Date(toNorm);
@@ -89,7 +106,7 @@ export async function sessionsSummary(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'UTC',
+      timezone: 'Asia/Kolkata',
     },
     agents,
   });
@@ -122,7 +139,7 @@ export async function sessionsList(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'UTC',
+      timezone: 'Asia/Kolkata',
     },
     sessions,
   });
@@ -188,7 +205,7 @@ export async function activitySummary(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'UTC',
+      timezone: 'Asia/Kolkata',
     },
     agents,
     metric_notes: {
@@ -245,7 +262,7 @@ export async function stateEventsList(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'UTC',
+      timezone: 'Asia/Kolkata',
     },
     events,
   });

@@ -807,7 +807,8 @@ async function handleCallcenterEvent(evt) {
            INSERT INTO agent_history
              (call_uuid, agent_id, queue_name, ring_start, ring_end, ring_seconds, talk_start, missed)
            SELECT $1, $2, $3, now(), now(), 0, now(), false
-           WHERE NOT EXISTS (SELECT 1 FROM upd)`,
+           WHERE NOT EXISTS (SELECT 1 FROM upd)
+           ON CONFLICT ON CONSTRAINT agent_history_call_agent_unique DO NOTHING`,
           [callUuid, agentId, queueName]
         );
       } catch (err) { console.error('[esl] bridge-agent-start:', err.message); }
@@ -825,10 +826,11 @@ async function handleCallcenterEvent(evt) {
           `UPDATE agent_history
              SET talk_end      = now(),
                  talk_seconds  = EXTRACT(EPOCH FROM (now() - talk_start))::INT
-           WHERE call_uuid = $1
-             AND agent_id  = $2
-             AND missed    = false
-             AND talk_end  IS NULL`,
+           WHERE call_uuid    = $1
+             AND agent_id     = $2
+             AND missed       = false
+             AND talk_start   IS NOT NULL
+             AND talk_end     IS NULL`,
           [callUuid, agentId]
         );
       } catch (err) { console.error('[esl] bridge-agent-end agent_history:', err.message); }
@@ -847,7 +849,15 @@ async function handleCallcenterEvent(evt) {
         await query(
           `INSERT INTO agent_history (call_uuid, agent_id, queue_name, ring_start, missed)
            VALUES ($1, $2, $3, now(), false)
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT ON CONSTRAINT agent_history_call_agent_unique DO UPDATE SET
+             ring_start   = CASE WHEN agent_history.missed = true
+               THEN EXCLUDED.ring_start
+               ELSE LEAST(agent_history.ring_start, EXCLUDED.ring_start) END,
+             ring_end     = CASE WHEN agent_history.missed = true THEN NULL ELSE agent_history.ring_end END,
+             ring_seconds = CASE WHEN agent_history.missed = true THEN NULL ELSE agent_history.ring_seconds END,
+             missed       = CASE WHEN agent_history.missed = true THEN false ELSE agent_history.missed END,
+             queue_name   = COALESCE(agent_history.queue_name, EXCLUDED.queue_name)
+           WHERE agent_history.talk_start IS NULL`,
           [callUuid, agentId, queueName]
         );
       } catch (err) { console.error('[esl] agent-offering:', err.message); }
@@ -910,13 +920,10 @@ async function handleCallcenterEvent(evt) {
         if (rows[0]) {
           const r = rows[0];
 
-          // ── Key fix: close open agent_history rows as missed ──────────────
-          // FreeSWITCH does NOT always fire agent-no-answer when the caller
-          // abandons mid-ring. Without this, calls_missed stays 0 and the CDR
-          // classifies the call as abandoned_queue instead of abandoned_agent.
-          if (!r.agent_answer_time) {
-            await finaliseAgentHistoryMissed(callUuid);
-          }
+          // Close any open agent_history rows as missed. Called unconditionally:
+          // the WHERE talk_start IS NULL inside finaliseAgentHistoryMissed ensures
+          // the answering agent's row (talk_start IS NOT NULL) is never touched.
+          await finaliseAgentHistoryMissed(callUuid);
 
           await updateHourlyStats(
             r.queue_name,
@@ -1036,11 +1043,11 @@ async function handleChannelHangup(evt) {
       );
       closedRows = backup.rows;
     }
-    // For every call closed without an agent answer, mark agent_history as missed.
+    // Finalise agent_history for every closed call. Called unconditionally:
+    // the WHERE talk_start IS NULL guard inside finaliseAgentHistoryMissed
+    // ensures the answering agent's row is never incorrectly marked missed.
     for (const r of closedRows) {
-      if (!r.agent_answer_time) {
-        await finaliseAgentHistoryMissed(r.call_uuid);
-      }
+      await finaliseAgentHistoryMissed(r.call_uuid);
     }
   } catch (err) { console.error('[esl] handleChannelHangup:', err.message); }
   ccEvents.emit('channel:hangup', { uuid: chanUuid, cause });

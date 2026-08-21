@@ -290,7 +290,7 @@ export default function Reports() {
                       'Calls Offered',
                       'Calls Answered',
                       'Calls Missed',
-                      'AHT (min)',
+                      'Avg Talk (min)',
                       'Total Talk (min)'
                     ].map(h => (
                       <th
@@ -327,7 +327,7 @@ export default function Reports() {
                         {a.calls_missed}
                       </td>
                       <td className="px-4 py-3 font-mono tnum text-gray-600 dark:text-ink-dim">
-                        {a.aht_min ?? '—'}
+                        {a.avg_talk_min ?? '—'}
                       </td>
                       <td className="px-4 py-3 font-mono tnum text-gray-600 dark:text-ink-dim">
                         {a.total_talk_min ?? '—'}

@@ -65,12 +65,21 @@ app.use((err, _req, res, _next) => {
 
 initSocket(server, config.cors.origin);
 
-server.listen(config.port, async () => {
-  console.log(`[server] ✓ listening on :${config.port}  env:${config.env}  cors:${config.cors.origin}`);
-  try { await warmPool(); } catch (err) { console.error('[db] warm-up failed:', err.message); }
-  try { await runMigrations(); } catch (err) {
-    console.error('[db] migration failed — shutting down:', err.message);
+// Run DB setup before binding the port so no HTTP request can reach the
+// application against a partially migrated schema.
+async function start() {
+  try {
+    await warmPool();
+    await runMigrations();
+  } catch (err) {
+    console.error('[startup] fatal — DB setup failed:', err.message);
     process.exit(1);
   }
-  connectESL();
-});
+
+  server.listen(config.port, () => {
+    console.log(`[server] ✓ listening on :${config.port}  env:${config.env}  cors:${config.cors.origin}`);
+    connectESL();
+  });
+}
+
+start();

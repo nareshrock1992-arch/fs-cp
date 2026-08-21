@@ -1,6 +1,72 @@
 import { query } from '../db/pool.js';
 import { cc } from '../services/eslService.js';
+import { config } from '../config/index.js';
 import * as agentSession from '../services/agentSessionService.js';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Contact builder — single canonical location for PAI prefix enforcement
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Every mod_callcenter agent contact that should carry P-Asserted-Identity must
+// start with {sip_cid_type=pid}.  This causes FreeSWITCH sofia to generate the
+// PAI header from effective_caller_id_name/number on the B-leg INVITE.
+//
+// Two endpoint types are supported:
+//
+//   internal — SIP user registered on the FreeSWITCH internal profile:
+//     {sip_cid_type=pid}user/<extension>@<FS_SIP_DOMAIN>
+//
+//   gateway  — SIP call via a named gateway:
+//     {sip_cid_type=pid}sofia/gateway/<gateway>/<destination>
+//
+// The function is deterministic and idempotent:
+//   - Calling it twice with the same inputs produces the same output.
+//   - An input that already contains {sip_cid_type=pid} is not double-prefixed.
+export function buildContact({ agentType, extension, gateway, destination, contact }) {
+  const PREFIX = '{sip_cid_type=pid}';
+
+  if (agentType === 'internal') {
+    if (!extension || !String(extension).trim()) {
+      throw Object.assign(new Error('extension is required for internal agents'), { status: 400 });
+    }
+    const sipDomain = config.fs.sipDomain;
+    if (!sipDomain) {
+      throw Object.assign(
+        new Error('FS_SIP_DOMAIN is not configured — cannot build internal agent contact'),
+        { status: 500 }
+      );
+    }
+    return `${PREFIX}user/${String(extension).trim()}@${sipDomain}`;
+  }
+
+  if (agentType === 'gateway') {
+    if (!gateway || !String(gateway).trim()) {
+      throw Object.assign(new Error('gateway is required for gateway agents'), { status: 400 });
+    }
+    if (!destination || !String(destination).trim()) {
+      throw Object.assign(new Error('destination is required for gateway agents'), { status: 400 });
+    }
+    return `${PREFIX}sofia/gateway/${String(gateway).trim()}/${String(destination).trim()}`;
+  }
+
+  // Legacy / direct-contact path: caller supplied a raw contact string.
+  // Normalize by stripping any existing {key=val} prefix blocks (idempotent),
+  // then prepend the canonical prefix.
+  if (contact && String(contact).trim()) {
+    const raw     = String(contact).trim();
+    const stripped = raw.replace(/^(\{[^}]*\})+/, '');
+    return `${PREFIX}${stripped}`;
+  }
+
+  throw Object.assign(
+    new Error('agentType (internal|gateway) or contact string is required'),
+    { status: 400 }
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agents CRUD
+// ─────────────────────────────────────────────────────────────────────────────
 
 // Returns all agents with their assigned queues in a `queues` array
 export async function listAgents(req, res) {
@@ -10,6 +76,7 @@ export async function listAgents(req, res) {
       a.agent_id,
       a.full_name,
       a.avaya_extension,
+      a.agent_type,
       a.contact,
       a.status,
       a.state,
@@ -35,8 +102,6 @@ export async function listAgents(req, res) {
     FROM agents a
     LEFT JOIN agent_tiers t ON t.agent_id = a.id
     LEFT JOIN queues q       ON q.id       = t.queue_id
-    -- status_since: start of the current open status segment (Available or On Break)
-    -- NULL if no open segment exists (e.g. Logged Out, or session service not running)
     LEFT JOIN LATERAL (
       SELECT started_at
       FROM   agent_state_events
@@ -69,27 +134,45 @@ export async function createAgent(req, res) {
     agentId,
     fullName,
     avayaExtension,
-    contact,
+    // Structured fields (preferred)
+    agentType,
+    extension,
+    gateway,
+    destination,
+    // Legacy raw contact (still accepted; normalized server-side)
+    contact: rawContact,
+    // Call behavior
     maxNoAnswer    = 3,
     wrapUpTime     = 20,
     rejectDelayTime = 2,
     busyDelayTime   = 60
   } = req.body;
 
-  if (!agentId || !fullName || !avayaExtension || !contact) {
-    return res.status(400).json({ error: 'agentId, fullName, avayaExtension and contact are required' });
+  if (!agentId || !fullName || !avayaExtension) {
+    return res.status(400).json({ error: 'agentId, fullName, and avayaExtension are required' });
   }
+
+  let builtContact;
+  try {
+    builtContact = buildContact({ agentType, extension, gateway, destination, contact: rawContact });
+  } catch (err) {
+    return res.status(err.status || 400).json({ error: err.message });
+  }
+
+  const resolvedType = agentType || (rawContact && rawContact.includes('sofia/gateway') ? 'gateway' : 'internal');
 
   const { rows } = await query(
     `INSERT INTO agents
-       (agent_id, full_name, avaya_extension, contact, max_no_answer, wrap_up_time, reject_delay_time, busy_delay_time)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       (agent_id, full_name, avaya_extension, agent_type, contact,
+        max_no_answer, wrap_up_time, reject_delay_time, busy_delay_time)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
      RETURNING *`,
-    [agentId, fullName, avayaExtension, contact, maxNoAnswer, wrapUpTime, rejectDelayTime, busyDelayTime]
+    [agentId, fullName, avayaExtension, resolvedType, builtContact,
+     maxNoAnswer, wrapUpTime, rejectDelayTime, busyDelayTime]
   );
 
   try {
-    await cc.agentAdd(agentId, contact);
+    await cc.agentAdd(agentId, builtContact);
     await cc.agentSetParam(agentId, 'max_no_answer',     maxNoAnswer);
     await cc.agentSetParam(agentId, 'wrap_up_time',      wrapUpTime);
     await cc.agentSetParam(agentId, 'reject_delay_time', rejectDelayTime);
@@ -104,32 +187,54 @@ export async function createAgent(req, res) {
 export async function updateAgent(req, res) {
   const { agentId } = req.params;
   const {
-    fullName, avayaExtension, contact,
+    fullName, avayaExtension,
+    // Structured fields
+    agentType,
+    extension,
+    gateway,
+    destination,
+    // Legacy raw contact
+    contact: rawContact,
+    // Call behavior
     maxNoAnswer, wrapUpTime, rejectDelayTime, busyDelayTime, active
   } = req.body;
+
+  // Build normalized contact only when contact-related fields are present
+  let builtContact = undefined;
+  const hasContactChange = agentType || extension || gateway || destination || rawContact;
+  if (hasContactChange) {
+    try {
+      builtContact = buildContact({ agentType, extension, gateway, destination, contact: rawContact });
+    } catch (err) {
+      return res.status(err.status || 400).json({ error: err.message });
+    }
+  }
 
   const { rows } = await query(
     `UPDATE agents SET
        full_name         = COALESCE($2, full_name),
        avaya_extension   = COALESCE($3, avaya_extension),
-       contact           = COALESCE($4, contact),
-       max_no_answer     = COALESCE($5, max_no_answer),
-       wrap_up_time      = COALESCE($6, wrap_up_time),
-       reject_delay_time = COALESCE($7, reject_delay_time),
-       busy_delay_time   = COALESCE($8, busy_delay_time),
-       active            = COALESCE($9, active)
+       agent_type        = COALESCE($4, agent_type),
+       contact           = COALESCE($5, contact),
+       max_no_answer     = COALESCE($6, max_no_answer),
+       wrap_up_time      = COALESCE($7, wrap_up_time),
+       reject_delay_time = COALESCE($8, reject_delay_time),
+       busy_delay_time   = COALESCE($9, busy_delay_time),
+       active            = COALESCE($10, active)
      WHERE agent_id = $1
      RETURNING *`,
-    [agentId, fullName, avayaExtension, contact, maxNoAnswer, wrapUpTime, rejectDelayTime, busyDelayTime, active]
+    [agentId, fullName, avayaExtension,
+     agentType || null, builtContact || null,
+     maxNoAnswer, wrapUpTime, rejectDelayTime, busyDelayTime, active]
   );
   if (!rows[0]) return res.status(404).json({ error: 'Agent not found' });
 
   try {
-    if (contact)                    await cc.agentSetParam(agentId, 'contact',           contact);
-    if (maxNoAnswer    !== undefined) await cc.agentSetParam(agentId, 'max_no_answer',     maxNoAnswer);
-    if (wrapUpTime     !== undefined) await cc.agentSetParam(agentId, 'wrap_up_time',      wrapUpTime);
+    if (builtContact)                 await cc.agentSetParam(agentId, 'contact',           builtContact);
+    if (maxNoAnswer    !== undefined)  await cc.agentSetParam(agentId, 'max_no_answer',     maxNoAnswer);
+    if (wrapUpTime     !== undefined)  await cc.agentSetParam(agentId, 'wrap_up_time',      wrapUpTime);
     if (rejectDelayTime !== undefined) await cc.agentSetParam(agentId, 'reject_delay_time', rejectDelayTime);
-    if (busyDelayTime  !== undefined) await cc.agentSetParam(agentId, 'busy_delay_time',   busyDelayTime);
+    if (busyDelayTime  !== undefined)  await cc.agentSetParam(agentId, 'busy_delay_time',   busyDelayTime);
   } catch (err) {
     console.error('[agents] FreeSWITCH sync failed on update:', err.message);
   }

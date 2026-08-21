@@ -52,6 +52,12 @@ export const config = {
     // Used by queueXml.js to write callcenter.conf.xml.
     // Leave unset to skip file write (XML still generated in memory).
     confPath: process.env.FS_CONF_PATH || null,
+
+    // SIP domain / IP of the FreeSWITCH internal profile.
+    // Used to build agent contact strings for internal (user/ext@domain) endpoints.
+    // Production value supplied by fs-cp deploy/.env SIP_DOMAIN → FS_SIP_DOMAIN.
+    // Dev value: the IP of the FreeSWITCH server's internal SIP profile.
+    sipDomain: process.env.FS_SIP_DOMAIN || '',
   },
 };
 
