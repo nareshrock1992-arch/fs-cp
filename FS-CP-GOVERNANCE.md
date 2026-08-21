@@ -157,14 +157,75 @@ These are independent — do not unify. Each uses the version appropriate for it
 
 ---
 
-## 10. Future Claude Code Rules
+## 10. MANDATORY RULES FOR FUTURE CLAUDE WORK
 
-When working in this repository:
+**At the start of every session working in fs-cp, Claude MUST:**
 
-1. Read this file at the start of every session.
-2. Read `CLAUDE.md` in `fs-cp` root (if present) for additional session guidance.
-3. **Never modify application logic inside `fs-cp/fs-enrs/` or `fs-cp/fs-cc/`** directly. All application changes must originate in the dev repos (`fs-enrs`, `fs-cc`) and flow in via sync.
-4. **Never modify `deploy/docker-compose.yml`** without explicit user instruction; it is the production deployment manifest.
-5. **Never deploy to remote servers** or push to git without explicit user instruction.
-6. When asked to sync, always show the user the list of files that will change before making changes.
-7. Treat the dev repos (`C:\Users\USER\Documents\fs-enrs` and `C:\Users\USER\Documents\fs-cc`) as the source of truth for application code. Treat fs-cp as the destination.
+1. Read `FS-CP-GOVERNANCE.md` (this file) before writing any code or making any changes.
+2. Read `deploy/DEPLOYMENT-GUIDE.md` to understand the current deployment architecture.
+3. Classify every proposed change using the four-category system in §1 of this document.
+
+**Never:**
+- Modify application logic inside `fs-cp/fs-enrs/` or `fs-cp/fs-cc/` directly. All application changes must originate in the dev repos and flow in via sync.
+- Modify `deploy/docker-compose.yml` without explicit user instruction.
+- Deploy to remote servers, push to git, or delete Docker volumes without explicit user instruction.
+- Commit `deploy/.env` — it is excluded by `deploy/.gitignore`. If it appears in `git status`, run `git rm --cached deploy/.env` immediately.
+- Commit any `backend/.env` or `.env` file from the application directories.
+
+**Always:**
+- When syncing app code, show the user the file list before copying.
+- When discovering a bug in application code, report it as "Requires fix in fs-enrs" or "Requires fix in fs-cc" — do NOT silently modify the embedded copy.
+- When making any change that affects deployment (env vars, ports, volumes, healthchecks, migration behavior, permissions), update `deploy/DEPLOYMENT-GUIDE.md` as part of the same change.
+
+---
+
+## 11. DEPLOYMENT GUIDE MAINTENANCE RULE
+
+`deploy/DEPLOYMENT-GUIDE.md` is the permanent operational reference for all deployments.
+
+**Whenever any of the following changes:**
+- Environment variable names, defaults, or required/optional status
+- Service ports, URLs, or routing
+- Volume mounts or host directory requirements
+- FreeSWITCH permission requirements
+- Healthcheck endpoints or behavior
+- Migration startup sequence
+- Admin bootstrap process
+- Docker service names or build contexts
+- Deployment commands
+
+**The deployer MUST also update `deploy/DEPLOYMENT-GUIDE.md`** in the same commit.
+
+Deployment knowledge must never exist only in source code or conversation history. The guide is the single authoritative reference for operators.
+
+---
+
+## 12. Admin Bootstrap Variable Names (Critical — Do Not Change)
+
+The environment variable names for first-boot admin creation are fixed by the application code. These must match exactly:
+
+| Application | Compose env var | Code reads | Seed script |
+|---|---|---|---|
+| ENRS | `INITIAL_ADMIN_EMAIL` | `process.env.INITIAL_ADMIN_EMAIL` | `src/db/seed-initial-admin.js` |
+| ENRS | `INITIAL_ADMIN_PASSWORD` | `process.env.INITIAL_ADMIN_PASSWORD` | same |
+| ENRS | `INITIAL_ADMIN_NAME` | `process.env.INITIAL_ADMIN_NAME` | same |
+| CC | `CC_INITIAL_ADMIN_USERNAME` | `process.env.CC_INITIAL_ADMIN_USERNAME` | `scripts/seed-initial-admin.js` |
+| CC | `CC_INITIAL_ADMIN_PASSWORD` | `process.env.CC_INITIAL_ADMIN_PASSWORD` | same |
+
+If these variable names change in application code (fs-enrs or fs-cc), both `docker-compose.yml` and `deploy/.env` must be updated in the same sync.
+
+---
+
+## 13. Log Directory Names (Critical — Must Match Compose)
+
+The `prepare-directories.sh` script creates host-side log directories that must exactly match the bind-mount sources in `docker-compose.yml`. Current mapping:
+
+| compose volume source | host path (relative to deploy/) | correct script dir name |
+|---|---|---|
+| `./logs/nginx` | `deploy/logs/nginx` | `logs/nginx` ✅ |
+| `./logs/cc` | `deploy/logs/cc` | `logs/cc` ✅ |
+| `./logs/enrs` | `deploy/logs/enrs` | `logs/enrs` ✅ |
+| `./uploads/cc` | `deploy/uploads/cc` | `uploads/cc` ✅ |
+| `./uploads/enrs` | `deploy/uploads/enrs` | `uploads/enrs` ✅ |
+
+If new volume mounts are added to `docker-compose.yml`, add matching `make_dir` calls to `prepare-directories.sh`.
