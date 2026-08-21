@@ -175,6 +175,10 @@ services:
       FS_ESL_PASSWORD: ${FS_ESL_PASSWORD}
       FS_ESL_RECONNECT_MS: ${FS_ESL_RECONNECT_MS}
 
+      # FreeSWITCH SIP domain — used to build internal agent contact strings.
+      # Maps to the global SIP_DOMAIN value (same domain used by ENRS for originate strings).
+      FS_SIP_DOMAIN: ${SIP_DOMAIN}
+
       # FreeSWITCH conf path — CC backend reads FS_CONF_PATH (not FS_CONF_DIR)
       FS_CONF_PATH: ${FS_CONF_DIR}
 
