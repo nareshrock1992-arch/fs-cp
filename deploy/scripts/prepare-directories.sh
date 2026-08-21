@@ -126,8 +126,8 @@ APP_DIRS=(
   "${DEPLOY_DIR}/ssl"
   "${DEPLOY_DIR}/ssl/acme"
   "${DEPLOY_DIR}/logs/nginx"
-  "${DEPLOY_DIR}/logs/cc-backend"
-  "${DEPLOY_DIR}/logs/enrs-backend"
+  "${DEPLOY_DIR}/logs/cc"       # matches docker-compose.yml volume ./logs/cc:/app/logs
+  "${DEPLOY_DIR}/logs/enrs"     # matches docker-compose.yml volume ./logs/enrs:/app/logs
   "${DEPLOY_DIR}/uploads/cc"
   "${DEPLOY_DIR}/uploads/enrs"
 )
