@@ -1,0 +1,49 @@
+# =============================================================================
+# fs-cp root .gitignore
+# Integration/deployment repository — never commit real credentials
+# =============================================================================
+
+# Environment files — secrets must NEVER be committed
+.env
+.env.local
+.env.*.local
+.env.production
+.env.staging
+.env.development
+.env.dev
+
+# Sub-project .env patterns
+fs-enrs/**/.env
+fs-enrs/**/.env.local
+fs-enrs/**/.env.*.local
+fs-cc/**/.env
+fs-cc/**/.env.local
+fs-cc/**/.env.*.local
+
+# Allow example/template files only
+!**/.env.example
+!deploy/.env.example
+
+# Dependencies (should not be copied from dev repos)
+fs-enrs/**/node_modules/
+fs-cc/**/node_modules/
+
+# Build artifacts
+fs-enrs/**/dist/
+fs-enrs/**/build/
+fs-cc/**/dist/
+fs-cc/**/build/
+
+# Python virtual environments
+fs-enrs/**/.venv/
+fs-enrs/**/venv/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
