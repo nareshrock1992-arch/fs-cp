@@ -23,7 +23,7 @@ const RULES = [
   {
     key: 'DB_PASSWORD',
     required: IS_PRODUCTION,
-    weak: ['changeme', 'password', ''],
+    weak: ['changeme', 'CHANGE_ME_enrs_db', 'password', ''],
     message: 'DB_PASSWORD must be set to a strong password.',
   },
   {
