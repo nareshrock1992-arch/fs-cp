@@ -53,6 +53,7 @@ const GatherNodeSchema = z.object({
   // Kept as string (not null) so the Lua handler's nil check works correctly.
   terminators:           z.string().max(4).optional().default(''),
   variable_name:         varName.optional().default('gather_result'),
+  prompt_source_type:    z.enum(['tts', 'audio']).optional().default('tts'),
   prompt_audio_file_id:  z.number().int().positive().optional(),
   prompt_text:           z.string().max(1000).optional(),
   prompt_audio_url:      localAudioUrl.optional(),
@@ -82,9 +83,11 @@ const ErsNodeSchema = z.object({
 });
 
 const HangupNodeSchema = z.object({
-  type:               z.literal('hangup'),
-  play_audio_file_id: z.number().int().positive().optional(),
-  play_audio_url:     localAudioUrl.optional(),
+  type:                  z.literal('hangup'),
+  goodbye_source_type:   z.enum(['none', 'audio', 'tts']).optional().default('none'),
+  play_audio_file_id:    z.number().int().positive().optional(),
+  play_audio_url:        localAudioUrl.optional(),
+  goodbye_text:          z.string().max(1000).optional(),
 });
 
 // ── NEW: condition node ───────────────────────────────────────────────────────
@@ -129,6 +132,7 @@ const RecordMessageNodeSchema = z.object({
   dtmf_stop_key:      z.string().max(1).optional().default('#'),
   silence_threshold:  z.number().int().min(10).max(2000).optional().default(500),
   silence_hits:       z.number().int().min(1).max(500).optional().default(20),
+  prompt_source_type: z.enum(['tts', 'audio']).optional().default('tts'),
   prompt_text:        z.string().max(1000).optional(),
   prompt_audio_url:   localAudioUrl.optional(),
   next:               nodeId,
@@ -202,29 +206,31 @@ const ErsOverflowCheckNodeSchema = z.object({
 const ErsOverflowWaitNodeSchema = z.object({
   type:                 z.literal('ers_overflow_wait'),
   ers_configuration_id: optionalConfigId,
+  hold_source_type:     z.enum(['tts', 'audio']).optional().default('tts'),
   hold_prompt_text:     z.string().max(1000).optional(),
   hold_audio_url:       localAudioUrl.optional(),
   max_wait_seconds:     z.number().int().min(10).max(3600).optional().default(300),
-  next:                 nodeId,   // fallback: wait cap hit / cancelled
-});
-
-const EnsBlastRecordNodeSchema = z.object({
-  type:                 z.literal('ens_blast_record'),
-  ens_configuration_id: optionalConfigId, // else resolved from dialed number
-  pin_prompt_text:      z.string().max(1000).optional(),
-  record_prompt_text:   z.string().max(1000).optional(),
-  max_record_seconds:   z.number().int().min(5).max(300).optional().default(120),
-  silence_threshold:    z.number().int().min(10).max(2000).optional().default(500),
-  silence_hits:         z.number().int().min(1).max(10).optional().default(3),
   next:                 nodeId,
 });
 
-const EnsPlaybackGateNodeSchema = z.object({
-  type:                 z.literal('ens_playback_gate'),
-  ers_configuration_id: optionalConfigId,
-  no_message_text:      z.string().max(1000).optional(),
-  true_node:            nodeId,
-  false_node:           nodeId,
+const EnsBlastRecordNodeSchema = z.object({
+  type:                     z.literal('ens_blast_record'),
+  ens_configuration_id:     optionalConfigId,
+  pin_prompt_source_type:   z.enum(['tts', 'audio']).optional().default('tts'),
+  pin_prompt_audio_url:     localAudioUrl.optional(),
+  pin_prompt_text:          z.string().max(1000).optional(),
+  record_prompt_source_type: z.enum(['tts', 'audio']).optional().default('tts'),
+  record_prompt_audio_url:  localAudioUrl.optional(),
+  record_prompt_text:       z.string().max(1000).optional(),
+  max_record_seconds:       z.number().int().min(5).max(300).optional().default(120),
+  silence_threshold:        z.number().int().min(10).max(2000).optional().default(500),
+  silence_hits:             z.number().int().min(1).max(10).optional().default(3),
+  next:                     nodeId,
+});
+
+const EnsPlaybackNodeSchema = z.object({
+  type:     z.literal('ens_playback'),
+  branches: z.record(z.string(), nodeId).optional(),
 });
 
 // ── Discriminated union — validates any node by its type field ────────────────
@@ -234,10 +240,14 @@ const EnsPlaybackGateNodeSchema = z.object({
 // discriminatedUnion construction in Zod 3.x:
 //   "Cannot read properties of undefined (reading 'type')"
 //
-// Cross-field rules that required .refine() on individual schemas are moved
-// here into a single .superRefine() so the union still enforces them.
+// Two exports:
+//   AnyNodeSchemaDraft — shape + field validation only; no cross-field rules.
+//                        Used by DraftGraphSchema (autosave) so the designer
+//                        can persist intermediate edit states.
+//   AnyNodeSchema      — adds cross-field semantic validation via superRefine.
+//                        Used by validateGraph and publishFlow.
 
-export const AnyNodeSchema = z.discriminatedUnion('type', [
+export const AnyNodeSchemaDraft = z.discriminatedUnion('type', [
   PlayNodeSchema,         // ZodObject ✓
   SayNodeSchema,          // ZodObject ✓
   GatherNodeSchema,       // ZodObject ✓  (refine is on the branches field, not the outer object)
@@ -254,15 +264,17 @@ export const AnyNodeSchema = z.discriminatedUnion('type', [
   ErsOverflowCheckNodeSchema, // ZodObject ✓  (refine is on the branches field)
   ErsOverflowWaitNodeSchema,  // ZodObject ✓
   EnsBlastRecordNodeSchema,   // ZodObject ✓
-  EnsPlaybackGateNodeSchema,  // ZodObject ✓
-]).superRefine((node, ctx) => {
+  EnsPlaybackNodeSchema,      // ZodObject ✓
+]);
+
+export const AnyNodeSchema = AnyNodeSchemaDraft.superRefine((node, ctx) => {
   if (node.type === 'gather') {
     const minD = node.min_digits ?? 1;
     const maxD = node.max_digits ?? 1;
     if (minD > maxD) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: `gather: min_digits (${minD}) must not exceed max_digits (${maxD})`,
+        message: `min_digits (${minD}) must not exceed max_digits (${maxD})`,
       });
     }
   }
@@ -271,13 +283,13 @@ export const AnyNodeSchema = z.discriminatedUnion('type', [
     if (srcType === 'url' && node.audio_file_id === undefined && node.audio_url === undefined) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'play node with static source requires audio_file_id or audio_url',
+        message: 'requires audio_file_id or audio_url when source type is static',
       });
     }
     if (srcType === 'variable' && !node.audio_variable) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'play node with dynamic source requires audio_variable (session variable name)',
+        message: 'requires audio_variable (session variable name) when source type is dynamic',
       });
     }
   }
@@ -288,8 +300,42 @@ export const AnyNodeSchema = z.discriminatedUnion('type', [
   ) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'ens node requires ens_configuration_id or ens_config_var',
+      message: 'requires ens_configuration_id or ens_config_var',
     });
+  }
+
+  // Explicit source_type enforcement — source_type=audio requires audio_url;
+  // source_type=tts requires non-empty text. No cross-type silent fallbacks.
+  if (node.type === 'gather' || node.type === 'record_message') {
+    const st = node.prompt_source_type ?? 'tts';
+    if (st === 'audio' && !node.prompt_audio_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'prompt_source_type=audio requires prompt_audio_url' });
+    }
+  }
+  if (node.type === 'ers_overflow_wait') {
+    const st = node.hold_source_type ?? 'tts';
+    if (st === 'audio' && !node.hold_audio_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'hold_source_type=audio requires hold_audio_url' });
+    }
+  }
+  if (node.type === 'hangup') {
+    const st = node.goodbye_source_type ?? 'none';
+    if (st === 'audio' && !node.play_audio_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'goodbye_source_type=audio requires play_audio_url or play_audio_file_id' });
+    }
+    if (st === 'tts' && !node.goodbye_text) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'goodbye_source_type=tts requires goodbye_text' });
+    }
+  }
+  if (node.type === 'ens_blast_record') {
+    const pinSt  = node.pin_prompt_source_type  ?? 'tts';
+    const recSt  = node.record_prompt_source_type ?? 'tts';
+    if (pinSt === 'audio' && !node.pin_prompt_audio_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'pin_prompt_source_type=audio requires pin_prompt_audio_url' });
+    }
+    if (recSt === 'audio' && !node.record_prompt_audio_url) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'record_prompt_source_type=audio requires record_prompt_audio_url' });
+    }
   }
 });
 
@@ -312,7 +358,7 @@ export const GraphSchema = z.object({
 
 export const DraftGraphSchema = z.object({
   entry_node_id: z.string().max(64),
-  nodes:         z.record(z.string().max(64), AnyNodeSchema),
+  nodes:         z.record(z.string().max(64), AnyNodeSchemaDraft),
   _layout:   z.record(z.any()).optional(),  // per-node {x,y} — stored, restores canvas positions
   _viewport: z.object({ x: z.number(), y: z.number(), scale: z.number() }).optional(), // pan+zoom
 }).passthrough();  // ignore any extra top-level keys the frontend might add

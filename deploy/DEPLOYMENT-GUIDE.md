@@ -369,7 +369,7 @@ cd /opt/omni/fs-cp/deploy
 docker compose build
 ```
 
-This builds 7 images. Expected time: 5–15 minutes depending on network speed. On subsequent builds with unchanged code, most layers are cached and it takes 1–2 minutes.
+This builds 8 images (including `omni-piper`). Expected time: 5–20 minutes depending on network speed — Piper requires downloading ONNX runtime during first build. On subsequent builds with unchanged code, most layers are cached and it takes 1–2 minutes.
 
 ### Start all services
 
@@ -377,9 +377,190 @@ This builds 7 images. Expected time: 5–15 minutes depending on network speed. 
 docker compose up -d
 ```
 
-This starts PostgreSQL, Redis, both backends, both frontends, the agent desktop, and nginx.
+This starts PostgreSQL, Redis, both backends, both frontends, the agent desktop, nginx, and Piper TTS.
 
 > **Important:** Do not proceed to verification until all containers report as **healthy**. This takes up to 3 minutes on first start (migrations running).
+
+---
+
+## G2. PIPER TTS SETUP (required — do not skip)
+
+Piper is the neural Text-to-Speech engine used by IVR nodes. It runs as a container that
+FreeSWITCH Lua scripts call at call time. The `enrs-backend` container will not start until
+Piper is healthy, so voice model files **must be staged before running `docker compose up`**.
+
+### Why two Piper URLs?
+
+The platform uses two different URLs for the same Piper container:
+
+| Variable | Used by | Value |
+|---|---|---|
+| `PIPER_BACKEND_URL` | ENRS backend container (Docker DNS) | `http://piper:5000` |
+| `PIPER_LUA_URL` | FreeSWITCH Lua on the HOST | `http://127.0.0.1:5001` |
+
+FreeSWITCH runs **on the host**, not inside Docker. It cannot resolve Docker service names,
+so the generated Lua scripts must use the host loopback address of the published port.
+
+### Step 1 — Verify host prerequisites
+
+```bash
+# curl must be available on the host (used by FreeSWITCH Lua to call Piper)
+which curl || echo "MISSING: install curl"
+
+# sox must be available for audio verification (optional but recommended)
+which sox || echo "sox not found — install with: apt-get install sox"
+
+# Confirm PIPER_HOST_PORT (default 5001) is not in use
+ss -tlnp | grep 5001 || echo "port 5001 is free"
+```
+
+### Step 2 — Create the model directory
+
+```bash
+sudo mkdir -p /opt/piper/models
+sudo chown 1001:1001 /opt/piper/models   # Piper container runs as uid 1001
+```
+
+The path `/opt/piper/models` is the default. If you changed `FS_PIPER_MODEL_DIR` in `.env`,
+use that path instead.
+
+### Step 3 — Stage the voice model
+
+The Piper model is NOT baked into the Docker image. It is read from a host directory
+mounted read-only into the container. The model must be present on the customer server
+before starting the stack — no internet download is required at runtime.
+
+**Customer / production deployments (offline):**
+
+Transfer the model files from the release bundle to the customer server:
+
+```bash
+# From your staging machine or release bundle — transfer model files to customer server
+scp en_US-lessac-medium.onnx      operator@CUSTOMER_SERVER:/opt/piper/models/
+scp en_US-lessac-medium.onnx.json operator@CUSTOMER_SERVER:/opt/piper/models/
+```
+
+If you are preparing the release bundle yourself, obtain the model files from the
+controlled release package, not from an internet source, and verify checksums (Step 4)
+before including them.
+
+**Development / staging only (requires internet):**
+
+```bash
+cd /opt/piper/models
+
+wget -q "https://github.com/rhasspy/piper/releases/download/v0.0.2/voice-en_US-lessac-medium.tar.gz"
+tar -xzf voice-en_US-lessac-medium.tar.gz
+rm voice-en_US-lessac-medium.tar.gz
+```
+
+After staging by either method you should have:
+```
+/opt/piper/models/
+  en_US-lessac-medium.onnx         (~60 MB)
+  en_US-lessac-medium.onnx.json    (~5 KB)
+```
+
+Set ownership so the Piper container (uid 1001) can read the files:
+```bash
+sudo chown -R 1001:1001 /opt/piper/models
+```
+
+### Step 4 — Verify checksums
+
+```bash
+sha256sum /opt/piper/models/en_US-lessac-medium.onnx
+# Expected: 5efe09e69902187827af646e1a6e9d269dee769f9877d17b16b1b46eeaaf019f
+
+sha256sum /opt/piper/models/en_US-lessac-medium.onnx.json
+# Expected: efe19c417bed055f2d69908248c6ba650fa135bc868b0e6abb3da181dab690a0
+```
+
+**Do not proceed if either checksum does not match.** The model files in the release
+bundle are the authoritative artifacts — if they fail verification, request a new
+release bundle from the vendor.
+
+### Step 5 — Configure .env
+
+Add these lines to your `.env` (uncomment from `.env.example`):
+
+```bash
+PIPER_BACKEND_URL=http://piper:5000
+PIPER_LUA_URL=http://127.0.0.1:5001
+PIPER_HOST_PORT=5001
+FS_PIPER_MODEL_DIR=/opt/piper/models
+PIPER_DEFAULT_VOICE=en_US-lessac-medium
+PIPER_IMAGE=omni-piper:latest
+```
+
+### Step 6 — Build the Piper image
+
+```bash
+cd /opt/omni/fs-cp/deploy
+docker compose build piper
+```
+
+Expected: `=> exporting to image  omni-piper:latest`
+
+First build downloads Python, ONNX runtime dependencies, and sox (~400 MB). Subsequent
+builds are cached and take under 60 seconds.
+
+### Step 7 — Verify Piper before starting the full stack
+
+You can bring up Piper in isolation to confirm it loads the model before starting all services:
+
+```bash
+docker compose up -d piper
+docker compose ps piper          # wait for: healthy
+docker compose logs piper        # look for: "Voices loaded" and "Application startup complete"
+```
+
+**Piper takes up to 60 seconds to load the model on first start.** The healthcheck uses a
+60-second `start_period` — `starting` status during this window is expected.
+
+### Step 8 — Smoke-test Piper synthesis
+
+```bash
+# From the host — exercises the Lua path (host loopback)
+curl -s -X POST http://127.0.0.1:5001/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Piper TTS is ready.","sample_rate":8000}' \
+  -o /tmp/piper-test.wav
+
+# Verify the WAV file
+file /tmp/piper-test.wav
+# Expected: WAVE audio, Microsoft PCM, 16 bit, mono 8000 Hz
+
+# Check duration (≥1 second for this text)
+soxi -D /tmp/piper-test.wav 2>/dev/null || echo "soxi not available — file check only"
+
+rm /tmp/piper-test.wav
+```
+
+### Step 9 — Verify the backend→Piper path (Docker DNS)
+
+```bash
+# From inside the enrs-backend container — exercises the Docker DNS path
+docker compose exec enrs-backend \
+  wget -qO- http://piper:5000/ready
+# Expected: {"status":"ready","voices":["en_US-lessac-medium"]}
+```
+
+If this command fails, Piper is not reachable from within the Docker network. Check:
+- `docker compose ps piper` shows `healthy`
+- Both services are on the same network: `docker network inspect omni_omni-net`
+
+### Step 10 — Check the generated Lua URL
+
+After IVR deployment (ENRS → IVR Builder → Deploy), verify the generated executor:
+
+```bash
+grep "PIPER_URL" /path/to/freeswitch/scripts/ivr_executor.lua
+# Expected: local PIPER_URL    = "http://127.0.0.1:5001"
+```
+
+If `PIPER_URL` is empty (`""`), `PIPER_LUA_URL` was not set in `.env` when the IVR was
+deployed. Set it and re-deploy the IVR flow from the IVR Builder.
 
 ---
 
@@ -398,6 +579,7 @@ Expected healthy output:
 NAME                  SERVICE         STATUS     PORTS
 omni-postgres         postgres        healthy    5432/tcp
 omni-redis            redis           healthy    6379/tcp
+omni-piper            piper           healthy    127.0.0.1:5001->5000/tcp
 omni-cc-backend       cc-backend      healthy    127.0.0.1:4000->4000/tcp
 omni-enrs-backend     enrs-backend    healthy    127.0.0.1:4100->4100/tcp
 omni-cc-frontend      cc-frontend     healthy
@@ -641,6 +823,93 @@ The seed script runs again on restart and creates the account if it does not exi
 
 ---
 
+### Piper container unhealthy / not starting
+
+**Symptom:** `docker compose ps` shows `omni-piper` as `unhealthy` or `restarting`.
+The `enrs-backend` will also be unhealthy because it waits for Piper.
+
+**Check:**
+```bash
+docker compose logs piper
+```
+
+**Common causes:**
+
+| Log message | Cause | Fix |
+|---|---|---|
+| `FileNotFoundError: .onnx` | Model file missing from `FS_PIPER_MODEL_DIR` | Complete Step 3–4 above |
+| `PermissionError` on models dir | Directory not owned by uid 1001 | `chown -R 1001:1001 /opt/piper/models` |
+| `No such file or directory: /app/models` | Volume mount path wrong | Check `FS_PIPER_MODEL_DIR` in `.env` |
+| `OSError: sox not found` | sox missing from image | Rebuild: `docker compose build --no-cache piper` |
+| Port 5001 already in use | Another process uses `PIPER_HOST_PORT` | Change `PIPER_HOST_PORT` in `.env` and `PIPER_LUA_URL` accordingly |
+
+---
+
+### IVR TTS node is silent (no audio, no error logged)
+
+**Symptom:** An IVR TTS node plays no audio. FreeSWITCH console shows no ERR for that call.
+
+**Check 1:** Is Piper enabled for this IVR deployment?
+```bash
+grep "PIPER_URL" /path/to/freeswitch/scripts/ivr_executor.lua
+```
+If `PIPER_URL = ""`, Piper was disabled when the IVR was last deployed. Set `PIPER_LUA_URL`
+in `.env` and re-deploy the IVR flow from the ENRS IVR Builder.
+
+**Check 2:** Can FreeSWITCH reach Piper?
+```bash
+# Run as the FreeSWITCH process user, on the host
+curl -s http://127.0.0.1:5001/ready
+# Expected: {"status":"ready",...}
+```
+
+If connection refused: Piper is not running, or the port binding is wrong.
+If the command hangs: a firewall rule may be blocking loopback. Check `iptables -L`.
+
+---
+
+### Piper synthesis slow on first call after idle
+
+**Expected behaviour.** Piper loads the `en_US-lessac-medium` ONNX model into memory on the
+first synthesis request after startup (not at healthcheck time). This cold-load takes
+10–20 seconds. Subsequent calls are fast (< 1 s for short phrases).
+
+The generated Lua uses `curl -m 25` (25-second timeout) to survive this cold start.
+If the first call is silent, check the FreeSWITCH ERR log — a timeout appears as:
+
+```
+[ivr_executor] Piper TTS failed (url=http://127.0.0.1:5001 size=0) — node will be silent
+```
+
+Restart the call. The model is now cached and synthesis will succeed.
+
+---
+
+### Adding a new Piper voice
+
+1. Download the new voice `.onnx` and `.onnx.json` files from
+   `https://huggingface.co/rhasspy/piper-voices` into `FS_PIPER_MODEL_DIR`.
+2. Edit `fs-enrs/services/piper/src/voices.py` and add the voice to `VOICE_REGISTRY`.
+3. Rebuild the Piper image: `docker compose build piper`
+4. Restart: `docker compose restart piper`
+5. Verify: `curl http://127.0.0.1:5001/voices` — the new voice should appear.
+
+---
+
+### Piper rollback
+
+To disable Piper and fall back to FreeSWITCH built-in TTS:
+
+1. In `.env`, comment out or empty `PIPER_BACKEND_URL` and `PIPER_LUA_URL`.
+2. Re-deploy all IVR flows from the ENRS IVR Builder (this regenerates Lua without
+   the Piper URL — TTS nodes will use `FS_TTS_ENGINE` instead).
+3. The Piper container remains running but is unused. To stop it:
+   `docker compose stop piper`
+   Note: if you stop Piper, `enrs-backend` will not restart until you remove the
+   `depends_on: piper` from `docker-compose.yml` or bring Piper back up.
+
+---
+
 ### Permission denied on FreeSWITCH directories
 
 **Symptom:** ENRS backend logs show `EACCES: permission denied` for recording or script directories.
@@ -659,7 +928,7 @@ setfacl -m u:1000:rwx /path/to/failing/directory
 
 Complete this after the deployment is verified as running.
 
-- [ ] All 8 containers show `healthy` in `docker compose ps`
+- [ ] All 9 containers show `healthy` in `docker compose ps` (including `omni-piper`)
 - [ ] `https://SERVER_NAME/enrs/` — login with ENRS admin account works
 - [ ] `https://SERVER_NAME/cc/` — login with CC admin account works
 - [ ] `https://SERVER_NAME/agent/` — agent desktop loads
@@ -672,6 +941,10 @@ Complete this after the deployment is verified as running.
 - [ ] Test ENS call: trigger a broadcast from ENRS, verify call reaches a phone
 - [ ] Test ERS conference: dial the emergency number, verify bridge works
 - [ ] Test IVR: dial an IVR number, verify menu plays
+- [ ] Piper TTS: `curl http://127.0.0.1:5001/ready` returns `{"status":"ready",...}`
+- [ ] Piper WAV smoke test: synthesize one sentence, verify WAV is 8000 Hz / 16-bit PCM
+- [ ] IVR TTS node: place a call to an IVR with a TTS node, confirm audio plays correctly
+- [ ] `grep "PIPER_URL" /path/to/freeswitch/scripts/ivr_executor.lua` shows the correct URL
 - [ ] Test CC: agent logs in to Agent Desktop, accepts a test call
 - [ ] Verify recordings appear in `FS_RECORDING_DIR` after test calls
 - [ ] Run `bash scripts/validate-deployment.sh` — all checks should pass

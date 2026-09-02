@@ -9,8 +9,7 @@
     "dev": "nodemon server.js",
     "db:init": "node db/init.js",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "seed:admin": "node scripts/seed-initial-admin.js"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

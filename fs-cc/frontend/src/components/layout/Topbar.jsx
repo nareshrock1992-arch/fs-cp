@@ -161,9 +161,14 @@ export default function Topbar({ isDark, toggleTheme }) {
         </div>
 
         {/* Clock */}
-        <span className="text-sm font-mono dark:text-ink-faint text-gray-400 hidden md:inline px-2">
-          {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-        </span>
+        <div className="hidden md:flex flex-col items-end px-2 leading-none gap-0.5">
+          <span className="text-sm font-mono tnum dark:text-ink-faint text-gray-500">
+            {now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+          </span>
+          <span className="text-[10px] dark:text-ink-faint/60 text-gray-400">
+            {now.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })}
+          </span>
+        </div>
 
         {/* Theme toggle */}
         <button

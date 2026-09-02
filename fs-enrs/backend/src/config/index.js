@@ -63,4 +63,32 @@ export const config = {
     // Leave empty ('') to suppress PAI when no gateway sip_domain is set.
     sipDomain:      process.env.FS_SIP_DOMAIN        || '',
   },
+
+  // Piper TTS synthesis service.
+  //
+  // TWO separate URLs are required because FreeSWITCH and the backend
+  // container access Piper over different network paths:
+  //
+  //   PIPER_BACKEND_URL — used by piperClient.js (Node.js backend → Piper).
+  //     Docker production: http://piper:5000   (Docker DNS on omni-net)
+  //     Source/DEV:        http://127.0.0.1:5002
+  //
+  //   PIPER_LUA_URL — embedded into generated Lua by deploymentEngine.js.
+  //     FreeSWITCH Lua runs on the HOST, not inside Docker, so it cannot
+  //     resolve Docker service names. It must use the loopback-bound port.
+  //     Docker production: http://127.0.0.1:5001  (host loopback → container)
+  //     Source/DEV:        http://127.0.0.1:5002
+  //
+  // Empty string for either URL disables that integration path.
+  piper: {
+    url:            process.env.PIPER_BACKEND_URL    || '',
+    luaUrl:         process.env.PIPER_LUA_URL        || '',
+    defaultVoice:   process.env.PIPER_DEFAULT_VOICE  || 'en_US-lessac-medium',
+    // HTTP request timeout for synthesis calls (ms).
+    // lessac-medium cold synthesis takes 12-16s — 30s gives safe headroom.
+    timeoutMs:      Number(process.env.PIPER_TIMEOUT_MS)     || 30000,
+    // Target output sample rate — must match FreeSWITCH codec profile
+    sampleRate:     Number(process.env.PIPER_SAMPLE_RATE)    || 8000,
+    maxConcurrent:  Number(process.env.PIPER_MAX_CONCURRENT) || 2,
+  },
 };

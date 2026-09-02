@@ -42,10 +42,14 @@ describe('luaGenerator — ERS incident creation', () => {
     expect(lua).not.toMatch(/post\("\/ers\/incidents",\s*\{[^}]*ers_configuration_id\s*=/s);
   });
 
-  it('generates conference_room client-side and checks incident_uuid in the response, never conference_room', () => {
+  it('generates conference_room client-side in exec_ers and checks incident_uuid, never d.conference_room', () => {
     expect(lua).toContain('local room = "ers_"');
     expect(lua).toContain('d.incident_uuid');
-    expect(lua).not.toContain('d.conference_room');
+    // exec_ers builds the room name locally and must NOT read d.conference_room.
+    // (ers_ring_all legitimately reads d.conference_room from the ring-all API
+    // response — that node's API contract returns the room; exec_ers does not.)
+    const ersBlock = lua.slice(lua.indexOf('local function exec_ers('), lua.indexOf('local function exec_ers_ring_all('));
+    expect(ersBlock).not.toContain('d.conference_room');
   });
 });
 
@@ -121,6 +125,83 @@ describe('luaGenerator — ENS notification trigger', () => {
   it('sends configuration_id and triggered_via=PHONE, not ens_configuration_id', () => {
     expect(lua).toMatch(/post\("\/ens\/notifications",\s*\{[^}]*configuration_id\s*=\s*cfg_id/s);
     expect(lua).toContain('triggered_via    = "PHONE"');
+  });
+});
+
+describe('luaGenerator — Piper TTS speak() integration', () => {
+  const luaWithPiper = generateIvrExecutorLua({
+    apiBase:   'http://127.0.0.1:4100',
+    apiKey:    'test-key',
+    ttsEngine: 'flite|kal',
+    piperUrl:  'http://127.0.0.1:5002',
+  });
+
+  it('embeds PIPER_URL constant from the piperUrl option', () => {
+    expect(luaWithPiper).toContain('local PIPER_URL    = "http://127.0.0.1:5002"');
+  });
+
+  it('speak() synthesizes via Piper curl when PIPER_URL is set', () => {
+    // curl format string passes PIPER_URL as the %s placeholder for the endpoint host
+    expect(luaWithPiper).toContain('%s/synthesize');
+    expect(luaWithPiper).toContain('safe_b, PIPER_URL, wav_path');
+    expect(luaWithPiper).toContain('s:streamFile(wav_path)');
+  });
+
+  it('Piper curl timeout is at least 20 seconds to survive cold model-load synthesis', () => {
+    // lessac-medium cold synthesis takes 10-15s on this server — a 10s timeout fires
+    // on the very first request after idle. 25s gives a safe margin without masking
+    // genuine Piper unavailability for too long.
+    const match = luaWithPiper.match(/curl -sf -m (\d+)/);
+    expect(match).not.toBeNull();
+    expect(parseInt(match[1], 10)).toBeGreaterThanOrEqual(20);
+  });
+
+  it('speak() does NOT fall through to FreeSWITCH TTS when Piper is configured but fails', () => {
+    // When PIPER_URL is set, Piper is the TTS engine. A FreeSWITCH TTS fallback
+    // (e.g. flite) is not guaranteed to be installed, so a failed Piper synthesis
+    // must return early — calling an absent TTS module produces a confusing ERR log
+    // and silence anyway, no better than a clean skip.
+    const piperFailBlock = luaWithPiper.slice(
+      luaWithPiper.indexOf('Piper TTS failed'),
+      luaWithPiper.indexOf('Piper TTS failed') + 200,
+    );
+    expect(piperFailBlock).toContain('return');
+    expect(luaWithPiper).toContain('Piper TTS failed');
+  });
+
+  it('uses a per-call sequence counter for unique WAV filenames', () => {
+    expect(luaWithPiper).toContain('local _tts_seq = 0');
+    expect(luaWithPiper).toContain('_tts_seq = _tts_seq + 1');
+  });
+
+  it('uses string.format %q for JSON-safe body encoding without cjson', () => {
+    expect(luaWithPiper).toContain('string.format("%q", text)');
+  });
+
+  it('cleans up the temp WAV after streamFile to avoid accumulation', () => {
+    expect(luaWithPiper).toContain('os.remove(wav_path)');
+  });
+
+  it('when piperUrl is empty, speak() uses FreeSWITCH TTS directly (no curl)', () => {
+    // Default lua has no piperUrl — PIPER_URL is ""
+    expect(lua).toContain('local PIPER_URL    = ""');
+    // The PIPER_URL guard means Piper block is skipped at runtime
+    expect(lua).toContain('if PIPER_URL ~= "" then');
+  });
+
+  it('embeds piperSampleRate (default 8000) in the Piper request body', () => {
+    expect(luaWithPiper).toContain('"sample_rate":8000');
+  });
+
+  it('embeds a custom piperSampleRate when provided — PIPER_SAMPLE_RATE is not hardcoded', () => {
+    const lua16k = generateIvrExecutorLua({
+      apiBase:         'http://127.0.0.1:4100',
+      apiKey:          'test-key',
+      piperUrl:        'http://127.0.0.1:5002',
+      piperSampleRate: 16000,
+    });
+    expect(lua16k).toContain('"sample_rate":16000');
+    expect(lua16k).not.toContain('"sample_rate":8000');
   });
 });
 

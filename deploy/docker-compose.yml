@@ -316,10 +316,23 @@ services:
       INITIAL_ADMIN_PASSWORD: ${INITIAL_ADMIN_PASSWORD}
       INITIAL_ADMIN_NAME: ${INITIAL_ADMIN_NAME:-System Administrator}
 
+      # Piper TTS — TWO separate URLs (see config/index.js for rationale)
+      # PIPER_BACKEND_URL: used by piperClient.js inside the container (Docker DNS)
+      # PIPER_LUA_URL:     embedded into generated Lua by deploymentEngine.js;
+      #                    FreeSWITCH Lua runs on the HOST so it must use loopback
+      PIPER_BACKEND_URL: ${PIPER_BACKEND_URL:-http://piper:5000}
+      PIPER_LUA_URL: ${PIPER_LUA_URL:-http://127.0.0.1:5001}
+      PIPER_DEFAULT_VOICE: ${PIPER_DEFAULT_VOICE:-en_US-lessac-medium}
+      PIPER_TIMEOUT_MS: ${PIPER_TIMEOUT_MS:-30000}
+      PIPER_SAMPLE_RATE: ${PIPER_SAMPLE_RATE:-8000}
+      PIPER_MAX_CONCURRENT: ${PIPER_MAX_CONCURRENT:-2}
+
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      piper:
         condition: service_healthy
     healthcheck:
       # /health/ready confirms DB + ESL connections (not just process alive)
@@ -419,6 +432,52 @@ services:
     logging:
       driver: json-file
       options: { max-size: "20m", max-file: "3" }
+
+  ##############################################################################
+  # PIPER TTS SERVICE
+  ##############################################################################
+  # Piper runs on the omni-net bridge. Two network paths reach it:
+  #   enrs-backend (container) → http://piper:5000        (Docker DNS)
+  #   FreeSWITCH Lua (host)    → http://127.0.0.1:5001   (loopback, bound port)
+  #
+  # The host-loopback port (5001) is bound here; the in-container port is 5000.
+  # Voice models are mounted read-only from FS_PIPER_MODEL_DIR on the host.
+  # To add a voice: drop the .onnx + .onnx.json pair into that directory and
+  # restart (or SIGHUP) the container — no rebuild needed.
+
+  piper:
+    image: ${PIPER_IMAGE:-omni-piper:latest}
+    build:
+      context: ../fs-enrs/services/piper
+      dockerfile: Dockerfile
+    container_name: omni-piper
+    restart: unless-stopped
+    networks:
+      - omni-net
+    ports:
+      # Bind to loopback so FreeSWITCH Lua on the host can reach Piper.
+      # enrs-backend uses Docker DNS (http://piper:5000) — does NOT use this port.
+      - "127.0.0.1:${PIPER_HOST_PORT:-5001}:5000"
+    volumes:
+      # Voice models mounted read-only — no container rebuild needed to add voices
+      - ${FS_PIPER_MODEL_DIR:-/opt/piper/models}:/app/models:ro
+    environment:
+      PIPER_MODEL_DIR: /app/models
+      PIPER_DEFAULT_VOICE: ${PIPER_DEFAULT_VOICE:-en_US-lessac-medium}
+      PIPER_SAMPLE_RATE: ${PIPER_SAMPLE_RATE:-8000}
+      PIPER_MAX_CONCURRENT: ${PIPER_MAX_CONCURRENT:-2}
+      PIPER_SYNTHESIS_TIMEOUT_SEC: ${PIPER_SYNTHESIS_TIMEOUT_SEC:-30}
+      PIPER_MAX_TEXT_LENGTH: ${PIPER_MAX_TEXT_LENGTH:-5000}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/ready || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      # Cold start includes model load — give it time before first health check
+      start_period: 60s
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "3" }
 
   ##############################################################################
   # NGINX — Common Reverse Proxy

@@ -44,6 +44,24 @@ export async function validateGraph(graph, tenantId) {
   if (errors.length > 0) return { valid: false, errors, warnings };
 
   // ── Pass 1: Zod schema ────────────────────────────────────────────────────
+  //
+  // Per-node validation runs FIRST so each error is scoped to its node ID in
+  // the format "node <nid>.<field>: message". If we let GraphSchema run first
+  // it would also fail for the same per-node errors but report them as
+  // "nodes.<nid>: message" (the Zod record path), which the frontend regex
+  // cannot parse into a node ID. Full GraphSchema then handles structural
+  // checks (entry_node_id existence) that per-node scans cannot detect.
+
+  for (const [nid, node] of Object.entries(g.nodes || {})) {
+    if (!node || typeof node !== 'object') continue; // already caught in pre-flight
+    const r = AnyNodeSchema.safeParse(node);
+    if (!r.success) {
+      for (const issue of r.error.issues) {
+        errors.push(`node ${nid}.${issue.path.join('.') || 'type'}: ${issue.message}`);
+      }
+    }
+  }
+  if (errors.length > 0) return { valid: false, errors, warnings };
 
   const parsed = GraphSchema.safeParse(g);
   if (!parsed.success) {
@@ -55,18 +73,6 @@ export async function validateGraph(graph, tenantId) {
   }
 
   const { entry_node_id, nodes } = parsed.data;
-
-  // Per-node Zod validation — re-run individually for clearer error paths
-  for (const [nid, node] of Object.entries(nodes)) {
-    if (!node || typeof node !== 'object') continue; // already caught above
-    const r = AnyNodeSchema.safeParse(node);
-    if (!r.success) {
-      for (const issue of r.error.issues) {
-        errors.push(`node ${nid}.${issue.path.join('.') || 'type'}: ${issue.message}`);
-      }
-    }
-  }
-  if (errors.length > 0) return { valid: false, errors, warnings };
 
   // ── Pass 2: Graph integrity ───────────────────────────────────────────────
 
@@ -148,7 +154,7 @@ export async function validateGraph(graph, tenantId) {
 
   for (const nid of reachable) {
     if (!canReachTerminal.has(nid)) {
-      errors.push(`Node "${nid}" can never reach an end of call (hangup/transfer/ers) — infinite loop with no exit`);
+      errors.push(`node ${nid}: can never reach an end of call (hangup/transfer/ers) — infinite loop with no exit branch`);
     }
   }
 
@@ -201,10 +207,13 @@ export async function validateGraph(graph, tenantId) {
       warnings.push(`Node "${nid}" (ENS Blast Record): Next Node not connected`);
     }
 
-    // ENS Playback Gate: missing configuration
-    if (node.type === 'ens_playback_gate') {
-      if (!node.ers_configuration_id) {
-        warnings.push(`Node "${nid}" (ENS Playback Gate): ERS Configuration is required`);
+    // ENS Playback: warn if no branches wired
+    if (node.type === 'ens_playback') {
+      const br = node.branches || {};
+      for (const key of ['active', 'unauthorized', 'no_campaign', 'expired']) {
+        if (!br[key]) {
+          warnings.push(`Node "${nid}" (ENS Playback): branch "${key}" is not connected`);
+        }
       }
     }
 
@@ -226,23 +235,27 @@ export async function validateGraph(graph, tenantId) {
 
   // ── Pass 2e: DB foreign key existence checks ──────────────────────────────
 
-  const ensIds       = [];
-  const ersIds       = [];
-  const audioFileIds = [];
+  // Track configId → nodeId so FK errors can reference the node that owns the bad ID.
+  const ensIdToNode   = new Map(); // configId → nid
+  const ersIdToNode   = new Map();
+  const audioIdToNode = new Map();
 
   // Any node type carrying an ens_configuration_id / ers_configuration_id
   // gets FK-checked — collected by FIELD, not by a hardcoded type list, so
-  // Phase 5 node types (ers_ring_all, ers_overflow_check, ers_overflow_wait,
-  // ens_blast_record, ens_playback_gate) and any future registry type that
-  // references a configuration are covered automatically.
-  for (const node of Object.values(nodes)) {
+  // node types like ers_ring_all, ers_overflow_check, ens_blast_record and any
+  // future registry type that references a configuration are covered automatically.
+  for (const [nid, node] of Object.entries(nodes)) {
     if (!node) continue;
-    if (typeof node.ens_configuration_id === 'number') ensIds.push(node.ens_configuration_id);
-    if (typeof node.ers_configuration_id === 'number') ersIds.push(node.ers_configuration_id);
-    if (node.type === 'play'   && node.audio_file_id)        audioFileIds.push(node.audio_file_id);
-    if (node.type === 'hangup' && node.play_audio_file_id)   audioFileIds.push(node.play_audio_file_id);
-    if (node.type === 'gather' && node.prompt_audio_file_id) audioFileIds.push(node.prompt_audio_file_id);
+    if (typeof node.ens_configuration_id === 'number') ensIdToNode.set(node.ens_configuration_id, nid);
+    if (typeof node.ers_configuration_id === 'number') ersIdToNode.set(node.ers_configuration_id, nid);
+    if (node.type === 'play'   && node.audio_file_id)        audioIdToNode.set(node.audio_file_id, nid);
+    if (node.type === 'hangup' && node.play_audio_file_id)   audioIdToNode.set(node.play_audio_file_id, nid);
+    if (node.type === 'gather' && node.prompt_audio_file_id) audioIdToNode.set(node.prompt_audio_file_id, nid);
   }
+
+  const ensIds       = [...ensIdToNode.keys()];
+  const ersIds       = [...ersIdToNode.keys()];
+  const audioFileIds = [...audioIdToNode.keys()];
 
   const checks = [];
 
@@ -255,7 +268,10 @@ export async function validateGraph(graph, tenantId) {
       ).then(r => {
         const found = new Set(r.rows.map(x => x.id));
         for (const id of ensIds) {
-          if (!found.has(id)) errors.push(`ens_configuration_id ${id} not found or wrong tenant`);
+          if (!found.has(id)) {
+            const nid = ensIdToNode.get(id);
+            errors.push(`node ${nid}: ens_configuration_id ${id} not found or wrong tenant`);
+          }
         }
       }).catch(() => {
         // Column may not exist on older schema — skip FK check
@@ -273,7 +289,10 @@ export async function validateGraph(graph, tenantId) {
       ).then(r => {
         const found = new Set(r.rows.map(x => x.id));
         for (const id of ersIds) {
-          if (!found.has(id)) errors.push(`ers_configuration_id ${id} not found or wrong tenant`);
+          if (!found.has(id)) {
+            const nid = ersIdToNode.get(id);
+            errors.push(`node ${nid}: ers_configuration_id ${id} not found or wrong tenant`);
+          }
         }
       }).catch(() => {
         warnings.push('ERS configuration FK check skipped (schema upgrade pending)');
@@ -295,7 +314,10 @@ export async function validateGraph(graph, tenantId) {
       ).then(r => {
         const found = new Set(r.rows.map(x => x.id));
         for (const id of audioFileIds) {
-          if (!found.has(id)) errors.push(`audio_file_id ${id} not found or belongs to a different tenant`);
+          if (!found.has(id)) {
+            const nid = audioIdToNode.get(id);
+            errors.push(`node ${nid}: audio_file_id ${id} not found or belongs to a different tenant`);
+          }
         }
       }).catch(() => {
         warnings.push('Media file FK check skipped (schema upgrade pending)');

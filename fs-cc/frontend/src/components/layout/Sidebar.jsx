@@ -48,30 +48,60 @@ export default function Sidebar() {
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 px-2 py-3 space-y-0.5 overflow-y-auto">
-        {navItems.map(({ to, label, icon: Icon, end }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={end}
-            className={({ isActive }) =>
-              isActive
-                ? 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-brand-light bg-brand/20 border border-brand/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60'
-                : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-ink-faint hover:text-ink-dim hover:bg-panel-raised transition-colors border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50'
-            }
-          >
-            {({ isActive }) => (
-              <>
-                <Icon
-                  size={17}
-                  strokeWidth={isActive ? 2.25 : 1.75}
-                  className={isActive ? 'text-brand-light' : ''}
-                />
-                <span>{label}</span>
-              </>
-            )}
-          </NavLink>
-        ))}
+      <nav className="flex-1 px-2 py-3 overflow-y-auto">
+        <p className="px-3 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-bold text-ink-faint/50">
+          Operations
+        </p>
+        <div className="space-y-0.5">
+          {navItems
+            .filter(({ to }) => to !== '/reports' && to !== '/users')
+            .map(({ to, label, icon: Icon, end }) => (
+              <NavLink key={to} to={to} end={end}
+                className={({ isActive }) =>
+                  isActive
+                    ? 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-brand-light bg-brand/20 border border-brand/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60'
+                    : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-ink-faint hover:text-ink-dim hover:bg-panel-raised transition-colors border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50'
+                }
+              >
+                {({ isActive }) => (
+                  <>
+                    <Icon size={17} strokeWidth={isActive ? 2.25 : 1.75}
+                      className={isActive ? 'text-brand-light' : ''} />
+                    <span>{label}</span>
+                  </>
+                )}
+              </NavLink>
+            ))}
+        </div>
+
+        {(canViewReports || isAdmin) && (
+          <>
+            <p className="px-3 pt-4 pb-1.5 text-[9px] uppercase tracking-[0.18em] font-bold text-ink-faint/50">
+              Management
+            </p>
+            <div className="space-y-0.5">
+              {navItems
+                .filter(({ to }) => to === '/reports' || to === '/users')
+                .map(({ to, label, icon: Icon }) => (
+                  <NavLink key={to} to={to}
+                    className={({ isActive }) =>
+                      isActive
+                        ? 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-semibold text-brand-light bg-brand/20 border border-brand/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/60'
+                        : 'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-ink-faint hover:text-ink-dim hover:bg-panel-raised transition-colors border border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50'
+                    }
+                  >
+                    {({ isActive }) => (
+                      <>
+                        <Icon size={17} strokeWidth={isActive ? 2.25 : 1.75}
+                          className={isActive ? 'text-brand-light' : ''} />
+                        <span>{label}</span>
+                      </>
+                    )}
+                  </NavLink>
+                ))}
+            </div>
+          </>
+        )}
       </nav>
 
       {/* Footer */}

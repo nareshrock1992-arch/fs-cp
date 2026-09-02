@@ -54,6 +54,7 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=3 \
   CMD wget -qO- http://127.0.0.1:4000/api/health || exit 1
 
 # tini as PID 1 — zombie reaping + signal forwarding.
-# docker-entrypoint.sh runs migrations + bootstrap, then execs node server.js.
+# docker-entrypoint.sh runs migrations + admin bootstrap, then execs node server.js.
+# server.js also calls runMigrations() on startup — that second call is a no-op.
 ENTRYPOINT ["/sbin/tini", "--", "/app/docker-entrypoint.sh"]
 CMD ["node", "server.js"]

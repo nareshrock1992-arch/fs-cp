@@ -1,7 +1,11 @@
 import { useState } from 'react';
-import { CheckCircle2, Upload, History, Phone, AlertTriangle, Loader2, Save, FlaskConical, Pencil } from 'lucide-react';
+import { CheckCircle2, Upload, History, Phone, AlertTriangle, Loader2, Save, FlaskConical, Pencil, ListChecks } from 'lucide-react';
 import Modal from '../../ui/Modal.jsx';
 import { api } from '../../../api/client.js';
+
+function humaniseError(err) {
+  return err.replace(/^node [^\s:]+[.:]?\s*/, '').trim() || err;
+}
 
 export default function BuilderToolbar({
   flow,
@@ -16,6 +20,8 @@ export default function BuilderToolbar({
   onShowBind,
   onFlowChange,
   onSaveNow,
+  onToggleErrors,
+  showErrors,
 }) {
   const [showPublish, setShowPublish] = useState(false);
   const [changeNotes, setChangeNotes] = useState('');
@@ -68,8 +74,7 @@ export default function BuilderToolbar({
     }
   }
 
-  const errorCount   = Object.values(errors).flat().filter(e => e && !e.startsWith('__')).length
-    + (errors.__global?.length || 0);
+  const errorCount = Object.values(errors).flat().length;
   const latestVer    = flow?.latest_version;
 
   async function handleValidate() {
@@ -95,30 +100,32 @@ export default function BuilderToolbar({
     }
   }
 
-  // Open publish modal — save any pending edits first, then validate.
-  // This is the fix for "edit → publish immediately → reload → changes gone":
-  // we flush the debounced autosave before publishing so the server always
-  // has the latest graph before we snapshot it as a published version.
+  // Open publish modal — validate the CURRENT in-memory graph first, then save.
+  // Validate-first means the user sees detailed per-node errors before we attempt
+  // any save, even if autosave has been failing for unrelated reasons.
   async function openPublish() {
     setLastValidation(null);
     setPubError('');
+    setShowPublish(true);   // open immediately so user sees "Validating…" state
 
-    // Flush pending autosave if the graph is dirty.
+    // Validate current in-memory graph (backend receives graph in request body).
+    setValidating(true);
+    const result = await onValidate();
+    setLastValidation(result);
+    setValidating(false);
+
+    // Block: do not save or publish if the current graph has errors.
+    if (!result || !result.valid) return;
+
+    // Graph is valid — flush pending autosave so the DB has the latest graph
+    // before we snapshot it as a published version.
     if ((dirty || saving) && onSaveNow) {
       try {
         await onSaveNow();
       } catch (e) {
         setPubError('Could not save before publishing: ' + (e.message || 'Save failed'));
-        setShowPublish(true);
-        return;
       }
     }
-
-    setShowPublish(true);
-    setValidating(true);
-    const result = await onValidate();
-    setLastValidation(result);
-    setValidating(false);
   }
 
   return (
@@ -163,12 +170,17 @@ export default function BuilderToolbar({
           {latestVer ? `● Published v${latestVer.version_number}` : '○ Draft'}
         </div>
 
-        {/* Error badge */}
+        {/* Error badge — clickable to open error panel */}
         {errorCount > 0 && (
-          <div className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-full
-                          bg-red-500/15 text-red-400 border border-red-500/20 shrink-0">
+          <button
+            onClick={onToggleErrors}
+            className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded-full border shrink-0 transition-colors
+              ${showErrors
+                ? 'bg-red-500/25 text-red-400 border-red-500/40'
+                : 'bg-red-500/15 text-red-400 border-red-500/20 hover:bg-red-500/25'}`}
+          >
             <AlertTriangle size={10} /> {errorCount} error{errorCount !== 1 ? 's' : ''}
-          </div>
+          </button>
         )}
 
         {/* Validate */}
@@ -288,11 +300,21 @@ export default function BuilderToolbar({
 
             {/* Validation summary */}
             <div className={`rounded-lg px-3 py-2.5 text-xs border
-              ${validating ? 'bg-surface border-surface-border text-text-muted'
-                : lastValidation?.valid
+              ${validating || !lastValidation
+                ? 'bg-surface border-surface-border text-text-muted'
+                : lastValidation.valid
                 ? 'bg-green-500/10 border-green-500/20 text-green-500'
                 : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
-              {validating && <span className="flex items-center gap-1.5"><Loader2 size={11} className="animate-spin" /> Validating graph…</span>}
+              {validating && (
+                <span className="flex items-center gap-1.5">
+                  <Loader2 size={11} className="animate-spin" /> Validating graph…
+                </span>
+              )}
+              {!validating && !lastValidation && (
+                <span className="flex items-center gap-1.5">
+                  <ListChecks size={11} /> Ready to validate — click Validate to check before publishing
+                </span>
+              )}
               {!validating && lastValidation?.valid && (
                 <span className="flex items-center gap-1.5">
                   <CheckCircle2 size={11} />
@@ -302,10 +324,14 @@ export default function BuilderToolbar({
               )}
               {!validating && lastValidation && !lastValidation.valid && (
                 <div>
-                  <p className="font-medium mb-1">Graph has errors — fix before publishing:</p>
-                  {lastValidation.errors?.slice(0, 3).map((e, i) => (
-                    <p key={i} className="text-[10px]">• {e}</p>
-                  ))}
+                  <p className="font-medium mb-1.5">
+                    {lastValidation.errors?.length} error{lastValidation.errors?.length !== 1 ? 's' : ''} — fix before publishing:
+                  </p>
+                  <div className="max-h-32 overflow-y-auto space-y-0.5">
+                    {lastValidation.errors?.map((e, i) => (
+                      <p key={i} className="text-[10px]">• {humaniseError(e)}</p>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

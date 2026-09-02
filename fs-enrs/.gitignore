@@ -20,3 +20,8 @@ npm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+
+# Piper OSS training/inference source tree — NOT the deployable Piper service.
+# This directory is the upstream piper project cloned for reference only.
+# The deployable service lives at services/piper/.
+piper-master/
