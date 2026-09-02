@@ -469,12 +469,13 @@ services:
       PIPER_SYNTHESIS_TIMEOUT_SEC: ${PIPER_SYNTHESIS_TIMEOUT_SEC:-30}
       PIPER_MAX_TEXT_LENGTH: ${PIPER_MAX_TEXT_LENGTH:-5000}
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/ready || exit 1"]
+      # python3 is always available in the python:3.11-slim base; wget/curl are not installed
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health', timeout=5)\" || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
       # Cold start includes model load — give it time before first health check
-      start_period: 60s
+      start_period: 90s
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "3" }
