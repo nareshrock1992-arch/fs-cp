@@ -131,13 +131,7 @@ async function deployLuaExecutor() {
     apiBase:   config.freeswitch?.apiUrl || `http://127.0.0.1:${config.port}`,
     apiKey:    process.env.INTERNAL_API_KEY || '',
     ttsEngine: process.env.FS_TTS_ENGINE || 'flite|kal',
-    // PIPER_LUA_URL is the address FreeSWITCH Lua uses to reach Piper.
-    // FreeSWITCH runs on the HOST, not inside Docker, so it cannot use the
-    // Docker service name (http://piper:5000). It must use the loopback-bound
-    // published port (http://127.0.0.1:5001 in production Docker).
-    // Source/DEV: both this and PIPER_BACKEND_URL are http://127.0.0.1:5002.
-    piperUrl:        config.piper.luaUrl,
-    piperSampleRate: config.piper.sampleRate,
+    piperUrl:  process.env.PIPER_LUA_URL || '',
   });
 
   const luaPath = fsPathService.getExecutorLuaFile();

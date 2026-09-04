@@ -165,6 +165,9 @@ export const startCampaign = asyncHandler(async (req, res) => {
     return res.status(401).json({ success: false, error: 'PIN required or invalid' });
   }
 
+  // Pass message_text through to the campaign engine, which will synthesize it
+  // via Piper (ensureCampaignTtsWav) before dispatching calls.
+  // No Piper synthesis here — the engine does it once per campaign, atomically.
   const campaign = await createCampaign({
     triggerNumber:  trigger_number,
     triggeredVia:   'PHONE',

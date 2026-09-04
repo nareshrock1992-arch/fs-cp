@@ -44,13 +44,12 @@ function buildDispatchTable() {
   return entries.join('\n');
 }
 
-export function generateIvrExecutorLua({ apiBase, apiKey, ttsEngine = 'flite|kal', piperUrl = '', piperSampleRate = 8000 }) {
+export function generateIvrExecutorLua({ apiBase, apiKey, ttsEngine = 'flite|kal', piperUrl = '' }) {
   // Sanitise inputs — these are embedded verbatim in the Lua file
-  const safeApiBase      = String(apiBase  || 'http://127.0.0.1:4100').replace(/"/g, '\\"');
-  const safeApiKey       = String(apiKey   || '').replace(/"/g, '\\"');
-  const safeTts          = String(ttsEngine || 'flite|kal').replace(/"/g, '\\"');
-  const safePiperUrl     = String(piperUrl  || '').replace(/"/g, '\\"');
-  const safePiperSampleRate = Number.isFinite(Number(piperSampleRate)) ? Number(piperSampleRate) : 8000;
+  const safeApiBase  = String(apiBase  || 'http://127.0.0.1:4100').replace(/"/g, '\\"');
+  const safeApiKey   = String(apiKey   || '').replace(/"/g, '\\"');
+  const safeTts      = String(ttsEngine || 'flite|kal').replace(/"/g, '\\"');
+  const safePiperUrl = String(piperUrl  || '').replace(/"/g, '\\"');
 
   return [
     '-- ============================================================',
@@ -227,7 +226,7 @@ export function generateIvrExecutorLua({ apiBase, apiKey, ttsEngine = 'flite|kal
     '    local wav_path  = tts_dir .. "/tts_" .. call_uuid .. "_" .. _tts_seq .. ".wav"',
     '    -- string.format("%q", ...) produces a Lua-quoted string compatible with JSON',
     '    -- for all printable ASCII — safe for TTS text without external cjson.',
-    `    local body      = '{"text":' .. string.format("%q", text) .. ',"sample_rate":${safePiperSampleRate}}'`,
+    '    local body      = \'{"text":\' .. string.format("%q", text) .. \',"sample_rate":8000}\'',
     '    local safe_b    = body:gsub("\'", "\'\\\\\'\'")  -- escape \' for shell single-quote context',
     '    local cmd = string.format(',
     '      "curl -sf -m 25 -X POST -H \'Content-Type: application/json\' -d \'%s\' \'%s/synthesize\' -o \'%s\' && echo piper_ok",',

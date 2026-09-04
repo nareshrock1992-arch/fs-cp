@@ -2,16 +2,8 @@
  * Piper TTS HTTP client.
  *
  * Pre-generates WAV audio from text by calling the Piper HTTP service.
- * FreeSWITCH Lua scripts never call this client directly — they play stored
- * WAV files produced here (ENS pre-synthesis path).
- *
- * IVR Lua scripts call Piper directly via curl using PIPER_LUA_URL embedded
- * in the generated ivr_executor.lua by deploymentEngine.js.
- *
- * Network paths:
- *   This client (Node.js backend, Docker container) → PIPER_BACKEND_URL
- *     Docker production: http://piper:5000  (Docker DNS on omni-net)
- *     Source/DEV:        http://127.0.0.1:5002
+ * FreeSWITCH Lua scripts never call Piper directly — they play stored WAV files
+ * produced here.
  *
  * Error model:
  *   PiperUnavailableError — service unreachable or not yet ready (503)
@@ -135,7 +127,6 @@ export async function synthesize(text, { voice = defaultVoice, sampleRate = defa
   const durationMs = Math.round(Number(res.headers.get('x-audio-duration-sec') ?? 0) * 1000);
   const latencyMs  = Math.round(Number(res.headers.get('x-synthesis-latency-ms') ?? 0));
 
-  // Log synthesis metadata but never the text content itself
   logger.info({ module: LOG, voice, sampleRate, bytes: buf.length, durationMs, latencyMs },
     'Piper synthesis complete');
 

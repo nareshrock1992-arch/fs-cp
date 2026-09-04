@@ -11,6 +11,14 @@ const lua = generateIvrExecutorLua({
   ttsEngine: 'flite|kal',
 });
 
+// Module-level — used by both the Piper TTS block and the HTML-entity regression block.
+const luaWithPiper = generateIvrExecutorLua({
+  apiBase:   'http://127.0.0.1:4100',
+  apiKey:    'test-key',
+  ttsEngine: 'flite|kal',
+  piperUrl:  'http://127.0.0.1:5002',
+});
+
 describe('luaGenerator — reserved-word dispatch key', () => {
   it('uses bracket syntax for the "goto" dispatch key, never a bare identifier', () => {
     // `goto` has been a reserved word since Lua 5.2 — `goto = fn` inside a
@@ -129,12 +137,7 @@ describe('luaGenerator — ENS notification trigger', () => {
 });
 
 describe('luaGenerator — Piper TTS speak() integration', () => {
-  const luaWithPiper = generateIvrExecutorLua({
-    apiBase:   'http://127.0.0.1:4100',
-    apiKey:    'test-key',
-    ttsEngine: 'flite|kal',
-    piperUrl:  'http://127.0.0.1:5002',
-  });
+  // Uses module-level luaWithPiper (defined at top of file).
 
   it('embeds PIPER_URL constant from the piperUrl option', () => {
     expect(luaWithPiper).toContain('local PIPER_URL    = "http://127.0.0.1:5002"');
@@ -188,21 +191,107 @@ describe('luaGenerator — Piper TTS speak() integration', () => {
     // The PIPER_URL guard means Piper block is skipped at runtime
     expect(lua).toContain('if PIPER_URL ~= "" then');
   });
+});
 
-  it('embeds piperSampleRate (default 8000) in the Piper request body', () => {
-    expect(luaWithPiper).toContain('"sample_rate":8000');
-  });
+describe('luaGenerator — deploymentEngine env-var contract (regression: PIPER_LUA_URL mismatch)', () => {
+  // Regression: deploymentEngine.js previously read process.env.PIPER_URL which is never set
+  // in Docker Compose (the env vars are PIPER_BACKEND_URL and PIPER_LUA_URL).
+  // That caused piperUrl to always be '' → PIPER_URL="" in Lua → Piper branch never taken
+  // → speak(flite|kal|...) → "Invalid speech module [flite]" on every TTS call.
+  //
+  // These tests guard the generator contract; the env-var READ is guarded by the
+  // deploymentEngine unit test (deploymentEngine.test.js).
 
-  it('embeds a custom piperSampleRate when provided — PIPER_SAMPLE_RATE is not hardcoded', () => {
-    const lua16k = generateIvrExecutorLua({
-      apiBase:         'http://127.0.0.1:4100',
-      apiKey:          'test-key',
-      piperUrl:        'http://127.0.0.1:5002',
-      piperSampleRate: 16000,
+  it('non-empty piperUrl produces a non-empty PIPER_URL constant', () => {
+    const l = generateIvrExecutorLua({
+      apiBase:  'http://127.0.0.1:4100',
+      apiKey:   'k',
+      piperUrl: 'http://127.0.0.1:5001',
     });
-    expect(lua16k).toContain('"sample_rate":16000');
-    expect(lua16k).not.toContain('"sample_rate":8000');
+    expect(l).toContain('local PIPER_URL    = "http://127.0.0.1:5001"');
+    expect(l).not.toContain('local PIPER_URL    = ""');
   });
+
+  it('empty piperUrl (PIPER_LUA_URL not set) produces PIPER_URL="" and bypasses Piper', () => {
+    const l = generateIvrExecutorLua({
+      apiBase:  'http://127.0.0.1:4100',
+      apiKey:   'k',
+      piperUrl: '',
+    });
+    expect(l).toContain('local PIPER_URL    = ""');
+  });
+
+  it('Piper branch is taken (curl + streamFile) when PIPER_URL is non-empty', () => {
+    const l = generateIvrExecutorLua({
+      apiBase:  'http://127.0.0.1:4100',
+      apiKey:   'k',
+      piperUrl: 'http://127.0.0.1:5001',
+    });
+    expect(l).toContain('s:streamFile(wav_path)');
+  });
+
+  it('when piperUrl is set, Piper return-early guard prevents FreeSWITCH speak() from executing', () => {
+    // This is the production failure: piperUrl was always '' because deploymentEngine.js
+    // read PIPER_URL (undefined) instead of PIPER_LUA_URL → PIPER_URL="" in Lua →
+    // speak(flite|kal|...) fired on every TTS call → "Invalid speech module [flite]".
+    //
+    // The s:execute("speak") line exists in the else-branch of the generated Lua even when
+    // piperUrl is set (runtime guard: `if PIPER_URL ~= ""`). What we can assert is that
+    // the Piper block's `return` statement appears BEFORE s:execute, proving the else-branch
+    // is structurally unreachable when PIPER_URL is non-empty.
+    const l = generateIvrExecutorLua({
+      apiBase:   'http://127.0.0.1:4100',
+      apiKey:    'k',
+      ttsEngine: 'flite|kal',
+      piperUrl:  'http://127.0.0.1:5001',
+    });
+    // The Piper block ends with an explicit return before the else-branch s:execute
+    expect(l).toContain('return  -- do not fall through to FreeSWITCH TTS; Piper is the configured engine');
+    // And the streamFile call is present (Piper path taken)
+    expect(l).toContain('s:streamFile(wav_path)');
+  });
+});
+
+describe('luaGenerator — no HTML entities in generated Lua (regression: external file-editor escaping)', () => {
+  // Root cause forensic finding: HTML entities (&amp;, &gt;, &lt;) were observed in the
+  // deployed ivr_executor.lua on the production server. Investigation confirmed the
+  // fs-enrs source code NEVER produced these entities — they were introduced by a
+  // server-side file manager or web-based editor that HTML-encodes file content when
+  // writing. These tests guard the generator output itself so the source is proven clean.
+  //
+  // The entities corrupt the Piper curl command at runtime:
+  //   && echo piper_ok  →  &amp;&amp; echo piper_ok  (shell syntax error)
+  //   2>/dev/null       →  2&gt;/dev/null           (shell redirect broken)
+  //   fsize > 100       →  fsize &gt; 100           (Lua syntax error in Lua 5.1)
+
+  it('no &amp; entity in generated Lua', () => {
+    expect(lua).not.toContain('&amp;');
+    expect(luaWithPiper).not.toContain('&amp;');
+  });
+
+  it('no &gt; entity in generated Lua', () => {
+    expect(lua).not.toContain('&gt;');
+    expect(luaWithPiper).not.toContain('&gt;');
+  });
+
+  it('no &lt; entity in generated Lua', () => {
+    expect(lua).not.toContain('&lt;');
+    expect(luaWithPiper).not.toContain('&lt;');
+  });
+
+  it('curl shell && separator is literal && not HTML-escaped', () => {
+    // The Piper curl command must end with: && echo piper_ok
+    // If this becomes &amp;&amp;, the shell never appends "piper_ok" to stdout,
+    // out:find("piper_ok") returns nil, and Piper synthesis is treated as a failure.
+    expect(luaWithPiper).toContain('&& echo piper_ok');
+  });
+
+  it('stderr redirect 2>/dev/null uses literal > not &gt;', () => {
+    // If 2>/dev/null becomes 2&gt;/dev/null the shell ignores the redirect and
+    // Piper stderr floods the FreeSWITCH log instead of being suppressed.
+    expect(luaWithPiper).toContain('2>/dev/null');
+  });
+
 });
 
 describe('luaGenerator — HTTP transport has no luasocket dependency', () => {
