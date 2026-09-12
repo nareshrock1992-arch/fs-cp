@@ -156,6 +156,11 @@ services:
       PORT: ${CC_BACKEND_PORT}
       LOG_LEVEL: ${LOG_LEVEL}
 
+      # Business/reporting timezone — REQUIRED (CC backend fails fast if unset/invalid).
+      # Defines business-day boundaries for reports/dashboards independent of the
+      # container timezone (containers stay UTC). Value from deploy/.env (IANA name).
+      BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE}
+
       # CORS — constructed here so SERVER_NAME interpolation works
       # (Docker Compose resolves ${SERVER_NAME} from .env; .env itself cannot
       # self-reference other variables)

@@ -59,7 +59,43 @@ export const config = {
     // Dev value: the IP of the FreeSWITCH server's internal SIP profile.
     sipDomain: process.env.FS_SIP_DOMAIN || '',
   },
+
+  // Business/reporting timezone — the ONLY thing that defines business-day
+  // (calendar) boundaries for reports, dashboards and history. It is deliberately
+  // decoupled from the container tz, the Node process tz, the PostgreSQL session
+  // tz, the FreeSWITCH host tz and the browser tz — none of those affect business
+  // correctness. Must be a valid IANA name (e.g. Asia/Riyadh, Asia/Kolkata, UTC).
+  // There is NO default and NO country-specific value baked in: it must be supplied
+  // by the deployment (fs-cp) and is validated at startup (see assertBusinessTimezone).
+  businessTimezone: process.env.BUSINESS_TIMEZONE || null,
 };
+
+// True if `tz` is a valid IANA timezone name accepted by the Intl engine.
+export function isValidTimeZone(tz) {
+  if (!tz || typeof tz !== 'string') return false;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Fail-fast guard invoked from server startup. BUSINESS_TIMEZONE is REQUIRED and
+// must be a valid IANA timezone. We never silently fall back to UTC, the host, the
+// container, the PostgreSQL session tz, or a developer machine tz — a wrong business
+// timezone silently corrupts every business-day report, so we refuse to start.
+export function assertBusinessTimezone() {
+  if (!config.businessTimezone) {
+    console.error('[config] FATAL: BUSINESS_TIMEZONE is required. Set it to a valid IANA timezone (e.g. Asia/Riyadh, Asia/Kolkata, UTC). Refusing to start.');
+    process.exit(1);
+  }
+  if (!isValidTimeZone(config.businessTimezone)) {
+    console.error(`[config] FATAL: BUSINESS_TIMEZONE="${config.businessTimezone}" is not a valid IANA timezone name. Refusing to start.`);
+    process.exit(1);
+  }
+  console.log(`[config] business timezone: ${config.businessTimezone}`);
+}
 
 // Warn loudly if running in production with obvious insecure defaults
 if (config.env === 'production') {

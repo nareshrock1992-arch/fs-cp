@@ -12,6 +12,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { businessDayRange } from '../../../utils/timezone.js';
 
 // ── Mock the DB pool so no real queries are sent ──────────────────────────────
 const mockQuery = vi.fn();
@@ -197,49 +198,35 @@ describe('Test H — handleChannelHangup calls finalise unconditionally', () => 
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Test I — IST date boundary (timezone fix)
-// utcDateRange: bare '2026-06-27' must produce IST midnight (not UTC midnight)
+// Test I — Business-day date boundary (CONFIGURATION-DRIVEN; was hardcoded IST)
+// Boundaries now come from utils/timezone.businessDayRange(date, BUSINESS_TIMEZONE)
+// and are proven per-zone/DST in timezone.test.js. Here we assert the reporting
+// property: the SAME absolute instant maps to the correct business calendar day
+// for the configured zone, using half-open [fromUTC, toUTC). No hardcoded offset.
 // ═══════════════════════════════════════════════════════════════════════════════
-describe('Test I — IST date boundary', () => {
-  it('bare date produces IST midnight (2026-06-01T00:00:00+05:30 = 2026-05-31T18:30:00Z)', () => {
-    const IST = '+05:30';
-    const bare = '2026-06-01';
-    const parsed = new Date(`${bare}T00:00:00${IST}`);
-    expect(parsed.toISOString()).toBe('2026-05-31T18:30:00.000Z');
+describe('Test I — business-day boundary (config-driven)', () => {
+  const inDay = (instantISO, dateStr, tz) => {
+    const { fromUTC, toUTC } = businessDayRange(dateStr, tz);
+    const t = Date.parse(instantISO);
+    return t >= fromUTC.getTime() && t < toUTC.getTime();
+  };
+
+  it('early-morning call belongs to the local business day (Asia/Kolkata)', () => {
+    // 2026-06-26T21:30:00Z = 2026-06-27 03:00 IST → business day 2026-06-27
+    expect(inDay('2026-06-26T21:30:00Z', '2026-06-27', 'Asia/Kolkata')).toBe(true);
+    expect(inDay('2026-06-26T21:30:00Z', '2026-06-26', 'Asia/Kolkata')).toBe(false);
   });
 
-  it('half-open upper bound: to=2026-06-01 produces 2026-06-02T00:00:00+05:30', () => {
-    const IST = '+05:30';
-    const toRaw = '2026-06-01';
-    const toDate = new Date(`${toRaw}T00:00:00${IST}`);
-    toDate.setDate(toDate.getDate() + 1);
-    // 2026-06-02 00:00:00 IST = 2026-06-01 18:30:00 UTC
-    expect(toDate.toISOString()).toBe('2026-06-01T18:30:00.000Z');
+  it('same instant, different configured zone → different business day', () => {
+    // 2026-06-26T21:30:00Z = 2026-06-27 00:30 Riyadh (+03) → business day 2026-06-27
+    expect(inDay('2026-06-26T21:30:00Z', '2026-06-27', 'Asia/Riyadh')).toBe(true);
+    // Same instant in UTC is still 2026-06-26
+    expect(inDay('2026-06-26T21:30:00Z', '2026-06-26', 'UTC')).toBe(true);
   });
 
-  it('IST midnight to IST midnight (same day) includes all 24 IST hours', () => {
-    const IST = '+05:30';
-    const from = new Date(`2026-06-27T00:00:00${IST}`); // 2026-06-26T18:30:00Z
-    const to   = new Date(`2026-06-28T00:00:00${IST}`); // 2026-06-27T18:30:00Z
-    // A call at 2026-06-27T05:00:00+05:30 should be within the range
-    const testCall = new Date(`2026-06-27T05:00:00${IST}`); // 2026-06-26T23:30:00Z
-    expect(testCall >= from && testCall < to).toBe(true);
-    // A call at 2026-06-26T23:59:00+05:30 should NOT be in range (previous IST day)
-    const prevDay = new Date(`2026-06-26T23:59:00${IST}`); // 2026-06-26T18:29:00Z
-    expect(prevDay >= from && prevDay < to).toBe(false);
-  });
-
-  it('UTC midnight (old bug) misses early IST morning calls', () => {
-    // Old utcDateRange behaviour: from = 2026-06-27T00:00:00Z (UTC midnight)
-    const utcFrom = new Date('2026-06-27T00:00:00Z');
-    // A call at 2026-06-27T03:00:00+05:30 = 2026-06-26T21:30:00Z
-    const IST = '+05:30';
-    const earlyCall = new Date(`2026-06-27T03:00:00${IST}`);
-    // Old range: earlyCall (21:30Z) < utcFrom (00:00Z next day) → EXCLUDED by mistake
-    expect(earlyCall < utcFrom).toBe(true); // confirms the old bug
-    // New IST range: from = 2026-06-26T18:30:00Z
-    const istFrom = new Date(`2026-06-27T00:00:00${IST}`);
-    expect(earlyCall >= istFrom).toBe(true); // correctly included
+  it('half-open upper bound excludes next-day local midnight', () => {
+    const { toUTC } = businessDayRange('2026-06-27', 'Asia/Kolkata');
+    expect(inDay(toUTC.toISOString(), '2026-06-27', 'Asia/Kolkata')).toBe(false);
   });
 });
 

@@ -10,6 +10,9 @@ import LiveCalls from './pages/LiveCalls.jsx';
 import QueueStats from './pages/QueueStats.jsx';
 import Reports from './pages/Reports.jsx';
 import UserManagement from './pages/UserManagement.jsx';
+import BreakCodes from './pages/BreakCodes.jsx';
+import BreakHistoryReport from './pages/reports/BreakHistoryReport.jsx';
+import CallHistoryReport from './pages/reports/CallHistoryReport.jsx';
 
 function ProtectedRoute({ children }) {
   const { isAuth } = useAuth();
@@ -30,6 +33,16 @@ function ReportsRoute({ children }) {
     user?.role === 'admin' ||
     (Array.isArray(user?.permissions) && user.permissions.includes('view_reports'));
   if (!canView) return <Navigate to="/" replace />;
+  return children;
+}
+
+function BreakCodesRoute({ children }) {
+  const { user, isAuth } = useAuth();
+  if (!isAuth) return <Navigate to="/login" replace />;
+  const canManage =
+    user?.role === 'admin' ||
+    (Array.isArray(user?.permissions) && user.permissions.includes('manage_break_codes'));
+  if (!canManage) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -56,6 +69,30 @@ export default function App() {
             <ReportsRoute>
               <Reports />
             </ReportsRoute>
+          }
+        />
+        <Route
+          path="reports/break-history"
+          element={
+            <ReportsRoute>
+              <BreakHistoryReport />
+            </ReportsRoute>
+          }
+        />
+        <Route
+          path="reports/call-history"
+          element={
+            <ReportsRoute>
+              <CallHistoryReport />
+            </ReportsRoute>
+          }
+        />
+        <Route
+          path="break-codes"
+          element={
+            <BreakCodesRoute>
+              <BreakCodes />
+            </BreakCodesRoute>
           }
         />
         <Route

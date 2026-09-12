@@ -92,7 +92,7 @@ function ServiceLevelGauge({ pct }) {
           {status}
         </p>
         <p className="text-[10px] text-gray-400 dark:text-ink-faint mt-1 leading-relaxed">
-          Target: ≥80% of calls<br />answered within 20s
+          Target: ≥80% answered within<br />each queue's configured target
         </p>
       </div>
     </div>

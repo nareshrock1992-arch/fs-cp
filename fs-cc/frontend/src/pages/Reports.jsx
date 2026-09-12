@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, LineChart, Line,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend,
 } from 'recharts';
-import { Reports as ReportsApi } from '../api/client.js';
+import { Reports as ReportsApi, Stats } from '../api/client.js';
 import Panel from '../components/Panel.jsx';
 import CDRTable from '../components/reports/CDRTable.jsx';
 import AgentSessionsTab from '../components/reports/AgentSessionsTab.jsx';
@@ -12,7 +12,18 @@ import { inputClass, buttonPrimary } from '../components/form.jsx';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function isoDate(d) { return d.toISOString().slice(0, 10); }
+// Browser-LOCAL calendar date (YYYY-MM-DD) — never toISOString() (which is UTC and
+// causes an off-by-one for evening users). This is only a client-side seed; the
+// backend authoritatively re-interprets the chosen dates in BUSINESS_TIMEZONE.
+function localIsoDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function addDaysStr(dateStr, n) {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + n);
+  return localIsoDate(dt);
+}
 
 const COLORS = {
   offered:   '#4C8EF5',   // blue
@@ -123,8 +134,18 @@ export default function Reports() {
     : { background: '#ffffff', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 12, color: '#111827' };
 
   const [tab,  setTab]  = useState('volume');
-  const [from, setFrom] = useState(isoDate(new Date(Date.now() - 7 * 86400000)));
-  const [to,   setTo]   = useState(isoDate(new Date()));
+  const [from, setFrom] = useState(addDaysStr(localIsoDate(new Date()), -6));
+  const [to,   setTo]   = useState(localIsoDate(new Date()));
+
+  // Seed the date range from the server-authoritative business calendar date so
+  // "today" reflects BUSINESS_TIMEZONE rather than the browser's local/UTC date.
+  useEffect(() => {
+    Stats.businessDate()
+      .then(({ business_date }) => {
+        if (business_date) { setTo(business_date); setFrom(addDaysStr(business_date, -6)); }
+      })
+      .catch(() => { /* keep local-date seed on failure */ });
+  }, []);
 
   const [volume,    setVolume]    = useState([]);
   const [queuePerf, setQueuePerf] = useState([]);

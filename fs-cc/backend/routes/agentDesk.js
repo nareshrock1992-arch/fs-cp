@@ -17,4 +17,12 @@ router.get('/calls',       asyncHandler(desk.agentCalls));
 router.get('/performance', asyncHandler(desk.agentPerformance));
 router.get('/esl-status',  asyncHandler(desk.eslStatus));
 
+// Break management (agent-facing)
+router.get('/break-codes',   asyncHandler(desk.agentBreakCodes));
+router.get('/break-history', asyncHandler(desk.agentBreakHistory));
+
+// Call history (agent-scoped — always req.agentId)
+router.get('/call-history',           asyncHandler(desk.agentCallHistory));
+router.get('/call-history/:callUuid', asyncHandler(desk.agentCallHistoryDetail));
+
 export default router;

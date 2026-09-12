@@ -1,7 +1,21 @@
 import { query } from '../db/pool.js';
+import { config } from '../config/index.js';
 import { isConnected } from '../services/eslService.js';
+import { businessTodayRange, businessToday } from '../utils/timezone.js';
+
+// GET /api/stats/business-date — the server-authoritative business calendar date
+// and configured business timezone, so the frontend seeds date pickers from the
+// business day (not the browser/UTC calendar date).
+export function getBusinessDate(_req, res) {
+  res.json({ business_timezone: config.businessTimezone, business_date: businessToday() });
+}
 
 export async function getDashboardStats(req, res) {
+  // "Today" = the current business calendar day in BUSINESS_TIMEZONE, as a
+  // half-open UTC range [fromUTC, toUTC). Independent of container/PG session tz.
+  const { fromUTC, toUTC } = businessTodayRange();
+  const day = [fromUTC.toISOString(), toUTC.toISOString()];
+
   const [agentCounts, callsToday, queueSnapshot, sla, queueDist] = await Promise.all([
     query(`SELECT status, COUNT(*)::INT AS count FROM agents WHERE active = true GROUP BY status`),
 
@@ -12,7 +26,8 @@ export async function getDashboardStats(req, res) {
          COUNT(*) FILTER (WHERE abandoned = true)::INT AS abandoned,
          COALESCE(AVG(wait_seconds) FILTER (WHERE wait_seconds IS NOT NULL), 0)::INT AS avg_wait_seconds,
          COALESCE(AVG(talk_seconds) FILTER (WHERE talk_seconds IS NOT NULL), 0)::INT AS avg_talk_seconds
-       FROM calls WHERE start_time >= CURRENT_DATE`
+       FROM calls WHERE start_time >= $1 AND start_time < $2`,
+      day
     ),
 
     query(
@@ -37,31 +52,37 @@ export async function getDashboardStats(req, res) {
        )::INT AS sla_pct
        FROM calls c
        JOIN queues q ON q.name = c.queue_name
-       WHERE c.start_time >= CURRENT_DATE`
+       WHERE c.start_time >= $1 AND c.start_time < $2`,
+      day
     ),
 
     // Per-queue today distribution — same "offered" definition as getQueueStats:
-    // COUNT(*) FILTER (WHERE start_time >= CURRENT_DATE), all dispositions.
+    // COUNT(*) FILTER over the business-day range [$1,$2), all dispositions.
     // LEFT JOIN so queues with zero calls today still appear.
     query(
       `SELECT
          q.name         AS queue_name,
          q.display_name,
-         COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE)::INT                           AS offered_today,
-         COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE AND c.disposition = 'answered')::INT AS answered_today,
+         COUNT(*) FILTER (WHERE c.start_time >= $1 AND c.start_time < $2)::INT                           AS offered_today,
+         COUNT(*) FILTER (WHERE c.start_time >= $1 AND c.start_time < $2 AND c.disposition = 'answered')::INT AS answered_today,
+         -- abandoned_queue = abandoned AND NOT agent-missed. Complement of
+         -- abandoned_agent over abandoned, so queue+agent === direct abandoned.
+         -- Keyed on missed=true (NOT bare EXISTS agent_history) so a stale
+         -- offering row (missed=false) never makes the call vanish from both.
          COUNT(*) FILTER (
-           WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true
-             AND NOT EXISTS (SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid)
+           WHERE c.start_time >= $1 AND c.start_time < $2 AND c.abandoned = true
+             AND NOT EXISTS (SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid AND ah.missed = true)
          )::INT AS abandoned_queue_today,
          COUNT(*) FILTER (
-           WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true
+           WHERE c.start_time >= $1 AND c.start_time < $2 AND c.abandoned = true
              AND EXISTS (SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid AND ah.missed = true)
          )::INT AS abandoned_agent_today
        FROM queues q
        LEFT JOIN calls c ON c.queue_name = q.name
        WHERE q.active = true
        GROUP BY q.name, q.display_name
-       ORDER BY offered_today DESC`
+       ORDER BY offered_today DESC`,
+      day
     )
   ]);
 
@@ -88,6 +109,8 @@ export async function getDashboardStats(req, res) {
 //       cs   → call metrics only, no agent_tiers join
 //       ag   → available-agent count only, no calls join
 export async function getQueueStats(req, res) {
+  // Business-day "today" range (BUSINESS_TIMEZONE), half-open, tz-independent.
+  const { fromUTC, toUTC } = businessTodayRange();
   const { rows } = await query(`
     SELECT
       q.name         AS queue_name,
@@ -132,29 +155,32 @@ export async function getQueueStats(req, res) {
         )::INT AS active,
 
         -- today totals
-        COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE)::INT
+        COUNT(*) FILTER (WHERE (c.start_time >= $1 AND c.start_time < $2))::INT
           AS offered_today,
 
         COUNT(*) FILTER (
-          WHERE c.start_time >= CURRENT_DATE AND c.disposition = 'answered'
+          WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.disposition = 'answered'
         )::INT AS answered_today,
 
         COUNT(*) FILTER (
-          WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true
+          WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.abandoned = true
         )::INT AS abandoned_today,
 
-        -- abandoned before any agent was offered
+        -- abandoned in queue = abandoned AND NOT agent-missed (complement of
+        -- abandoned_agent over abandoned → queue+agent === direct abandoned).
+        -- Keyed on missed=true so a stale offering row (missed=false) is still
+        -- counted here rather than disappearing from both buckets.
         COUNT(*) FILTER (
-          WHERE c.start_time >= CURRENT_DATE
+          WHERE (c.start_time >= $1 AND c.start_time < $2)
             AND c.abandoned = true
             AND NOT EXISTS (
-              SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid
+              SELECT 1 FROM agent_history ah WHERE ah.call_uuid = c.call_uuid AND ah.missed = true
             )
         )::INT AS abandoned_queue_today,
 
         -- abandoned after agent was offered but didn't answer
         COUNT(*) FILTER (
-          WHERE c.start_time >= CURRENT_DATE
+          WHERE (c.start_time >= $1 AND c.start_time < $2)
             AND c.abandoned = true
             AND EXISTS (
               SELECT 1 FROM agent_history ah
@@ -163,20 +189,20 @@ export async function getQueueStats(req, res) {
         )::INT AS abandoned_agent_today,
 
         COALESCE(AVG(c.wait_seconds) FILTER (
-          WHERE c.start_time >= CURRENT_DATE AND c.disposition = 'answered'
+          WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.disposition = 'answered'
         ), 0)::INT AS avg_wait_today,
 
         -- SLA %: answered-within-threshold / (answered + abandoned)
         COALESCE(
           100.0
           * COUNT(*) FILTER (
-              WHERE c.start_time >= CURRENT_DATE
+              WHERE (c.start_time >= $1 AND c.start_time < $2)
                 AND c.disposition = 'answered'
                 AND c.wait_seconds <= q.max_wait_time
             )
           / NULLIF(
-              COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE AND c.disposition = 'answered') +
-              COUNT(*) FILTER (WHERE c.start_time >= CURRENT_DATE AND c.abandoned = true),
+              COUNT(*) FILTER (WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.disposition = 'answered') +
+              COUNT(*) FILTER (WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.abandoned = true),
               0),
           0
         )::NUMERIC(5,1) AS sla_pct_today,
@@ -202,7 +228,7 @@ export async function getQueueStats(req, res) {
 
     WHERE q.active = true
     ORDER BY q.display_name
-  `);
+  `, [fromUTC.toISOString(), toUTC.toISOString()]);
 
   res.json(rows);
 }

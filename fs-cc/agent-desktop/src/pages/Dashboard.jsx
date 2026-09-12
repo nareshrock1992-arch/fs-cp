@@ -1,8 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Phone, LogOut } from 'lucide-react';
+import { Phone, LogOut, LayoutDashboard, PhoneCall, Coffee, X } from 'lucide-react';
 import { api }            from '../api/client.js';
 import { socket }         from '../api/socket.js';
 import StatusControls     from '../components/StatusControls.jsx';
+import CurrentBreakPanel  from '../components/CurrentBreakPanel.jsx';
+import CallHistory        from '../components/CallHistory.jsx';
+import BreakHistory       from '../components/BreakHistory.jsx';
 import QueueCard          from '../components/QueueCard.jsx';
 import LiveCallPanel      from '../components/LiveCallPanel.jsx';
 import EslBadge           from '../components/EslBadge.jsx';
@@ -35,9 +38,22 @@ export default function Dashboard({ auth, theme }) {
   const [perfLoading, setPerfLoading] = useState(true);
   const [eslConn,     setEslConn]     = useState(false);
   const [callState,   setCallState]   = useState(null);
+  const [breakCodes,  setBreakCodes]  = useState([]);
+  const [view,        setView]        = useState('dashboard'); // dashboard | calls | breaks
+  const [toast,       setToast]       = useState(null);
 
   const agentId     = agent?.agent_id;
   const agentStatus = agent?.status || 'Logged Out';
+
+  // Configured break codes (active + selectable) — source of truth for the
+  // break menu, current-break thresholds, and history filters.
+  const fetchBreakCodes = useCallback(async () => {
+    try { setBreakCodes(await api.breakCodes()); } catch { /* keep last */ }
+  }, []);
+  useEffect(() => { fetchBreakCodes(); }, [fetchBreakCodes]);
+
+  // Threshold lookup for the current break (by code) from the configured list.
+  const currentBreakCfg = breakCodes.find(bc => bc.code === agent?.break_code) || null;
 
   // ── Queue stats polling ───────────────────────────────────────────────────
   const fetchQueues = useCallback(async () => {
@@ -100,7 +116,12 @@ export default function Dashboard({ auth, theme }) {
     let mounted = true;
     api.me()
       .then(fresh => {
-        if (mounted) updateAgent({ status: fresh.status, state: fresh.state });
+        if (mounted) updateAgent({
+          status: fresh.status, state: fresh.state,
+          break_code: fresh.break_code ?? null,
+          break_name: fresh.break_name ?? null,
+          break_started_at: fresh.break_started_at ?? null,
+        });
       })
       .catch(err => console.warn('[agent-desktop] mount status sync failed — keeping existing status:', err.message));
     return () => { mounted = false; };
@@ -122,7 +143,12 @@ export default function Dashboard({ auth, theme }) {
       // localStorage after a backend restart that doesn't emit agent:status.
       try {
         const fresh = await api.me();
-        updateAgent({ status: fresh.status, state: fresh.state });
+        updateAgent({
+          status: fresh.status, state: fresh.state,
+          break_code: fresh.break_code ?? null,
+          break_name: fresh.break_name ?? null,
+          break_started_at: fresh.break_started_at ?? null,
+        });
       } catch { /* ignore — mount sync or next agent:status event will correct */ }
     };
 
@@ -216,14 +242,39 @@ export default function Dashboard({ auth, theme }) {
     };
   }, [agentId, fetchQueues, fetchCalls, fetchPerf, updateAgent]);
 
+  // Pull authoritative status + break fields from the backend (single source of
+  // truth for the break timer — never trusts a client clock).
+  const syncMe = useCallback(async () => {
+    try {
+      const fresh = await api.me();
+      updateAgent({
+        status: fresh.status, state: fresh.state,
+        break_code: fresh.break_code ?? null,
+        break_name: fresh.break_name ?? null,
+        break_started_at: fresh.break_started_at ?? null,
+      });
+    } catch { /* keep existing */ }
+  }, [updateAgent]);
+
   async function handleLogout() {
     try { await api.setStatus('Logged Out'); } catch {}
     logout();
   }
 
-  function handleStatusChange(newStatus) {
+  async function handleStatusChange(newStatus) {
     updateAgent({ status: newStatus });
-    if (newStatus === 'Logged Out') setTimeout(logout, 500);
+    if (newStatus === 'Logged Out') { setTimeout(logout, 500); return; }
+    await syncMe();          // reconcile break_code/break_name/break_started_at
+  }
+
+  // Return-to-Available from the current-break panel. Sends NO break code.
+  async function handleReturnFromBreak() {
+    try {
+      await api.setStatus('Available');
+      await syncMe();
+    } catch (err) {
+      setToast(err.message || 'Failed to return to Available');
+    }
   }
 
   return (
@@ -275,36 +326,91 @@ export default function Dashboard({ auth, theme }) {
       {/* ── Main ───────────────────────────────────────────────────────────── */}
       <main className="flex-1 p-4 space-y-4 max-w-5xl w-full mx-auto">
 
+        {toast && (
+          <div role="alert" className="card p-3 border border-lamp-alert/40 bg-lamp-alert/10
+                          flex items-center justify-between gap-3">
+            <span className="text-sm text-lamp-alert">{toast}</span>
+            <button onClick={() => setToast(null)} aria-label="Dismiss" className="text-lamp-alert/70 hover:text-lamp-alert">
+              <X size={15} />
+            </button>
+          </div>
+        )}
+
         {callState && <LiveCallPanel callState={callState} />}
 
-        <StatusControls currentStatus={agentStatus} onStatusChange={handleStatusChange} />
-
-        <PerformanceCard perf={perf} loading={perfLoading} />
-
-        <div>
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-ink-dim uppercase tracking-wider">
-              My Queues
-            </h2>
-            <span className="text-[11px] text-ink-faint">Live · 3s refresh</span>
-          </div>
-
-          {queues.length === 0 ? (
-            <div className="card p-8 text-center text-ink-faint text-sm">
-              No queues assigned — ask your supervisor to add you to a queue in the Admin UI.
-            </div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {queues.map(q => <QueueCard key={q.name} q={q} />)}
-            </div>
-          )}
+        {/* View tabs */}
+        <div className="flex gap-1 border-b border-panel-border" role="tablist" aria-label="Agent views">
+          {[
+            { key: 'dashboard', label: 'Dashboard',     Icon: LayoutDashboard },
+            { key: 'calls',     label: 'Call History',  Icon: PhoneCall },
+            { key: 'breaks',    label: 'Break History', Icon: Coffee },
+          ].map(({ key, label, Icon }) => (
+            <button
+              key={key}
+              role="tab"
+              aria-selected={view === key}
+              onClick={() => setView(key)}
+              className={`flex items-center gap-2 px-3 py-2 text-sm font-medium border-b-2 -mb-px transition-colors
+                ${view === key
+                  ? 'border-brand text-brand-light'
+                  : 'border-transparent text-ink-faint hover:text-ink-dim'}`}
+            >
+              <Icon size={15} /> {label}
+            </button>
+          ))}
         </div>
 
-        <div className="text-[11px] text-ink-faint flex flex-wrap gap-4
-                        border-t border-panel-border pt-3">
-          <span>Agent: <code className="text-ink-dim">{agent?.agent_id}</code></span>
-          <span>Extension: <code className="text-ink-dim">{agent?.avaya_extension}</code></span>
-        </div>
+        {view === 'dashboard' && (
+          <>
+            {agentStatus === 'On Break' && agent?.break_started_at && (
+              <CurrentBreakPanel
+                breakName={agent.break_name}
+                breakCode={agent.break_code}
+                breakStartedAt={agent.break_started_at}
+                maxDurationSeconds={currentBreakCfg?.max_duration_seconds}
+                warnThresholdSeconds={currentBreakCfg?.warn_threshold_seconds}
+                onReturn={handleReturnFromBreak}
+              />
+            )}
+
+            <StatusControls
+              currentStatus={agentStatus}
+              breakCodes={breakCodes}
+              onStatusChange={handleStatusChange}
+              onError={setToast}
+            />
+
+            <PerformanceCard perf={perf} loading={perfLoading} />
+
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-sm font-semibold text-ink-dim uppercase tracking-wider">
+                  My Queues
+                </h2>
+                <span className="text-[11px] text-ink-faint">Live · 3s refresh</span>
+              </div>
+
+              {queues.length === 0 ? (
+                <div className="card p-8 text-center text-ink-faint text-sm">
+                  No queues assigned — ask your supervisor to add you to a queue in the Admin UI.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {queues.map(q => <QueueCard key={q.name} q={q} />)}
+                </div>
+              )}
+            </div>
+
+            <div className="text-[11px] text-ink-faint flex flex-wrap gap-4
+                            border-t border-panel-border pt-3">
+              <span>Agent: <code className="text-ink-dim">{agent?.agent_id}</code></span>
+              <span>Extension: <code className="text-ink-dim">{agent?.avaya_extension}</code></span>
+            </div>
+          </>
+        )}
+
+        {view === 'calls'  && <CallHistory />}
+        {view === 'breaks' && <BreakHistory breakCodes={breakCodes} />}
       </main>
 
       <footer className="border-t border-panel-border px-4 py-2 text-center">

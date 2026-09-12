@@ -6,72 +6,57 @@
  *
  * DATE RANGE CONTRACT
  * ────────────────────
- * All endpoints accept ISO-8601 query params:
- *   ?from=2026-06-01  (inclusive lower bound, IST calendar day start)
- *   ?to=2026-06-30    (inclusive upper bound, IST calendar day end)
+ * All endpoints accept business CALENDAR-date query params:
+ *   ?from=2026-06-01  (inclusive lower business day)
+ *   ?to=2026-06-30    (inclusive upper business day)
  *
- * If omitted, defaults to the current IST calendar day.
- * Bare dates are interpreted as IST (Asia/Kolkata, +05:30) midnight.
- * The server TZ is Asia/Kolkata; using +05:30 suffix produces the correct
- * UTC equivalent of IST midnight, matching the reporting timezone used
- * throughout the rest of the system (dateRange() in reportsController.js).
+ * Dates are interpreted in the configured BUSINESS_TIMEZONE (not a hardcoded
+ * offset, not the container/session tz) via utils/timezone.businessDayRange,
+ * producing a HALF-OPEN UTC range [fromUTC, toUTC). If omitted, defaults to the
+ * current business day. This matches the boundaries used across the rest of the
+ * reporting layer (reportsController, statsController, queryHelpers).
  */
 
 import * as svc from '../services/agentReportService.js';
+import { config } from '../config/index.js';
+import { businessToday, businessDayRange, toBusinessDateStr } from '../utils/timezone.js';
 
 // ── Date range helper ────────────────────────────────────────────────────────
 
 /**
- * Returns { from: Date, to: Date } using half-open IST calendar-day boundaries.
- * Bare dates like "2026-06-01" are interpreted as IST midnight (+05:30).
- * Full ISO strings with Z/offset are used as-is.
- * Uses a half-open interval: >= from AND < to (next day midnight).
- *
- * Validates both params are valid dates; throws 400 if not.
+ * Returns { from: Date, to: Date } as absolute UTC instants for the requested
+ * business calendar days, using half-open boundaries in the configured
+ * BUSINESS_TIMEZONE (NOT a hardcoded offset, NOT the container/session tz).
+ * `from`/`to` are business calendar dates (YYYY-MM-DD; an ISO string's date
+ * portion is used). Defaults to the current business day. Responds 400 on
+ * invalid input.
  */
 function utcDateRange(fromStr, toStr, res) {
-  const IST = '+05:30';
-  const today = new Date();
-  // Derive today in IST by formatting with local offset (server TZ = IST)
-  const todayStr = today.toLocaleDateString('sv').slice(0, 10); // "2026-08-10"
-
-  const fromRaw = fromStr ?? `${todayStr}`;
-  const toRaw   = toStr   ?? `${todayStr}`;
-
-  // Bare dates get IST midnight; full ISO strings with offset are used as-is
-  const fromNorm = fromRaw.includes('T') ? fromRaw : `${fromRaw}T00:00:00${IST}`;
-  // Half-open upper bound: next calendar day at IST midnight.
-  // Validate the parsed date before advancing it so invalid input falls through
-  // to the isNaN check below rather than throwing a RangeError.
-  let toNorm;
-  if (toRaw.includes('T')) {
-    toNorm = toRaw;
-  } else {
-    const toDate = new Date(`${toRaw}T00:00:00${IST}`);
-    if (!isNaN(toDate.getTime())) {
-      toDate.setDate(toDate.getDate() + 1);
-      toNorm = toDate.toISOString(); // next IST midnight expressed as UTC
-    } else {
-      toNorm = toRaw; // invalid — will be caught by the isNaN check below
-    }
-  }
-
-  const from = new Date(fromNorm);
-  const to   = new Date(toNorm);
-
-  if (isNaN(from.getTime()) || isNaN(to.getTime())) {
+  const invalid = () => {
     res.status(400).json({
-      error: 'Invalid date range. Use ISO-8601 format, e.g. from=2026-06-01&to=2026-06-30',
+      error: 'Invalid date range. Use business calendar dates (YYYY-MM-DD), e.g. from=2026-06-01&to=2026-06-30',
     });
     return null;
-  }
+  };
+  try {
+    const tz = config.businessTimezone;
+    const fromProvided = fromStr != null && String(fromStr).trim() !== '';
+    const toProvided   = toStr   != null && String(toStr).trim()   !== '';
+    // Omitted → default to today's business day. Provided-but-unparseable → 400.
+    const fromDate = fromProvided ? toBusinessDateStr(fromStr) : businessToday(tz);
+    const toDate   = toProvided   ? toBusinessDateStr(toStr)   : businessToday(tz);
+    if ((fromProvided && !fromDate) || (toProvided && !toDate)) return invalid();
 
-  if (from > to) {
-    res.status(400).json({ error: '`from` must be before or equal to `to`' });
-    return null;
+    const from = businessDayRange(fromDate, tz).fromUTC;
+    const to   = businessDayRange(toDate, tz).toUTC; // half-open: start of day after toDate
+    if (from > to) {
+      res.status(400).json({ error: '`from` must be before or equal to `to`' });
+      return null;
+    }
+    return { from, to };
+  } catch {
+    return invalid();
   }
-
-  return { from, to };
 }
 
 // ── GET /api/reports/agent-sessions ─────────────────────────────────────────
@@ -106,7 +91,7 @@ export async function sessionsSummary(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'Asia/Kolkata',
+      timezone: config.businessTimezone,
     },
     agents,
   });
@@ -139,7 +124,7 @@ export async function sessionsList(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'Asia/Kolkata',
+      timezone: config.businessTimezone,
     },
     sessions,
   });
@@ -205,7 +190,7 @@ export async function activitySummary(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'Asia/Kolkata',
+      timezone: config.businessTimezone,
     },
     agents,
     metric_notes: {
@@ -262,7 +247,7 @@ export async function stateEventsList(req, res) {
     date_range: {
       from:     range.from.toISOString(),
       to:       range.to.toISOString(),
-      timezone: 'Asia/Kolkata',
+      timezone: config.businessTimezone,
     },
     events,
   });

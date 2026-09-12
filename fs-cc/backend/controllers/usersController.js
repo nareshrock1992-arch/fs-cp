@@ -3,7 +3,7 @@ import { query } from '../db/pool.js';
 
 const SAFE_COLS = `id, username, role, permissions, created_at`;
 
-const VALID_PERMISSIONS = ['view_reports', 'change_agent_state'];
+const VALID_PERMISSIONS = ['view_reports', 'change_agent_state', 'manage_break_codes'];
 
 export async function listUsers(_req, res) {
   const { rows } = await query(`SELECT ${SAFE_COLS} FROM users ORDER BY created_at`);

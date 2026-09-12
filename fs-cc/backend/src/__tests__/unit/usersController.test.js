@@ -53,6 +53,19 @@ describe('updatePermissions', () => {
     expect(res.json).toHaveBeenCalledWith(updated);
   });
 
+  // ── 2b. Sets manage_break_codes permission (Phase 4.5 RBAC fix) ───────────
+  it('accepts manage_break_codes as a valid grantable permission', async () => {
+    const updated = { id: 4, username: 'sup3', role: 'supervisor', permissions: ['manage_break_codes'], created_at: new Date() };
+    mockQuery.mockResolvedValueOnce({ rows: [updated] });
+
+    const req = { params: { id: '4' }, body: { permissions: ['manage_break_codes'] } };
+    await updatePermissions(req, res);
+
+    const [, params] = mockQuery.mock.calls[0];
+    expect(params[0]).toEqual(['manage_break_codes']);
+    expect(res.json).toHaveBeenCalledWith(updated);
+  });
+
   // ── 3. Sets both permissions together ────────────────────────────────────
   it('accepts both view_reports and change_agent_state together', async () => {
     const perms = ['view_reports', 'change_agent_state'];

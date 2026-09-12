@@ -264,7 +264,16 @@ export async function setAgentStatus(req, res) {
     return res.status(400).json({ error: `status must be one of: ${VALID_STATUSES.join(', ')}` });
   }
   try { await cc.agentSetStatus(agentId, status); } catch (e) { /* ESL offline */ }
-  await query(`UPDATE agents SET status = $2 WHERE agent_id = $1`, [agentId, status]);
+  // Admin-forced status changes carry no break reason. Keep the agent's current
+  // break_code / break_started_at consistent: cleared unless forced On Break.
+  await query(
+    `UPDATE agents
+        SET status           = $2,
+            break_code       = NULL,
+            break_started_at = CASE WHEN $2 = 'On Break' THEN now() ELSE NULL END
+      WHERE agent_id = $1`,
+    [agentId, status]
+  );
   await query(
     `INSERT INTO agent_state_log (agent_id, status, reason) VALUES ($1,$2,'manual')`,
     [agentId, status]

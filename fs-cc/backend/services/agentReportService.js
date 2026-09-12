@@ -49,14 +49,16 @@
  *
  * TIMEZONE
  * ─────────
- * All timestamps stored as TIMESTAMPTZ (UTC). Date range boundaries passed from
- * the controller as JavaScript Date objects (always UTC-aware).
- * Both controllers now use IST midnight boundaries. dateRange() in reportsController
- * produces IST midnight via local-time parsing on the IST server (correct).
- * utcDateRange() in agentReportController uses explicit +05:30 offset (also correct).
+ * All timestamps stored as TIMESTAMPTZ (UTC). Date-range boundaries are passed
+ * from the controller as JavaScript Date objects (absolute UTC instants). Those
+ * boundaries are computed from the configured BUSINESS_TIMEZONE via
+ * utils/timezone.businessDayRange (half-open [fromUTC, toUTC)); this service only
+ * consumes them and never re-applies any timezone. Duration math here uses
+ * absolute-instant arithmetic and is timezone-independent.
  */
 
 import { query } from '../db/pool.js';
+import { config } from '../config/index.js';
 
 // ── Internal helpers ─────────────────────────────────────────────────────────
 
@@ -422,7 +424,7 @@ export async function getActivityDetail(agentId, from, to) {
     date_range: {
       from:     from.toISOString(),
       to:       to.toISOString(),
-      timezone: 'UTC',
+      timezone: config.businessTimezone,
     },
 
     sessions: {

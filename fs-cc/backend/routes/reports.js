@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requirePermission } from '../middleware/auth.js';
 import * as reports     from '../controllers/reportsController.js';
 import * as agentReport from '../controllers/agentReportController.js';
+import * as history     from '../controllers/historyController.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 
 const router = Router();
@@ -29,5 +30,9 @@ router.get('/agent-activity/:agentId', asyncHandler(agentReport.activityDetail))
 
 // State events (debug / drilldown)
 router.get('/agent-state-events/:agentId', asyncHandler(agentReport.stateEventsList));
+
+// ── Break + Call history (supervisor/admin, cross-agent) ─────────────────────
+router.get('/break-history', asyncHandler(history.supervisorBreakHistory));
+router.get('/call-history',  asyncHandler(history.supervisorCallHistory));
 
 export default router;

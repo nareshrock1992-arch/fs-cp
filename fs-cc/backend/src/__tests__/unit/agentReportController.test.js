@@ -99,7 +99,7 @@ describe('Scenario 2 — utcDateRange: malformed from date', () => {
 
     expect(res.status).toHaveBeenCalledWith(400);
     expect(res.json).toHaveBeenCalledWith(
-      expect.objectContaining({ error: expect.stringContaining('ISO-8601') })
+      expect.objectContaining({ error: expect.stringContaining('business calendar') })
     );
     expect(svc.getSessionsSummary).not.toHaveBeenCalled();
   });

@@ -22,6 +22,12 @@ const ALL_PERMISSIONS = [
     label:       'Change Agent State',
     description: 'Set agents to Available, On Break, or Logged Out',
   },
+  {
+    key:         'manage_break_codes',
+    group:       'Configuration',
+    label:       'Manage Break Codes',
+    description: 'Create, edit, and enable/disable agent break reasons',
+  },
 ];
 
 function RoleBadge({ role }) {

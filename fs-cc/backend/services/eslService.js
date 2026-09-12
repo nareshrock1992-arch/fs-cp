@@ -427,7 +427,7 @@ async function closeGhostCallsEnhanced(minAgeSeconds = 10) {
   const memberList  = Array.from(activeMemberUuids);
   const channelList = Array.from(activeChannelVdns);
 
-  const { rowCount } = await query(
+  const { rows, rowCount } = await query(
     `UPDATE calls SET
        end_time     = COALESCE(end_time, now()),
        abandoned    = CASE WHEN agent_answer_time IS NULL THEN true ELSE abandoned END,
@@ -444,7 +444,8 @@ async function closeGhostCallsEnhanced(minAgeSeconds = 10) {
        -- not in the queue member list
        AND ($1::text[] IS NULL OR call_uuid != ALL($1::text[]))
        -- not a bridged channel still active
-       AND ($2::text[] IS NULL OR vdn IS NULL OR vdn != ALL($2::text[]))`,
+       AND ($2::text[] IS NULL OR vdn IS NULL OR vdn != ALL($2::text[]))
+     RETURNING call_uuid, agent_answer_time`,
     [
       memberList.length  > 0 ? memberList  : null,
       channelList.length > 0 ? channelList : null,
@@ -454,6 +455,14 @@ async function closeGhostCallsEnhanced(minAgeSeconds = 10) {
   if (rowCount > 0) {
     console.log(`[esl] ghost-reaper closed ${rowCount} stale call(s)`);
     ccEvents.emit('channel:hangup', { ghost: true, count: rowCount });
+  }
+  // Consistency: finalize any stale agent_history offering row for calls the
+  // reaper just abandoned (agent_answer_time IS NULL), so agent_history never
+  // disagrees with calls.abandoned. Reuses the idempotent helper — its
+  // WHERE missed=false AND talk_start IS NULL guard means answered/bridged rows
+  // are never marked missed, and repeat reaper passes are safe (no-op).
+  for (const r of rows) {
+    if (!r.agent_answer_time) await finaliseAgentHistoryMissed(r.call_uuid);
   }
 }
 
@@ -466,7 +475,7 @@ async function reaperCycle() {
       await closeGhostCallsEnhanced(10);
     } else {
       // ESL offline — only close calls that have been waiting >30 min (safe fallback)
-      await query(
+      const { rows: reaped } = await query(
         `UPDATE calls SET
            end_time     = now(),
            abandoned    = true,
@@ -474,8 +483,15 @@ async function reaperCycle() {
            wait_seconds = EXTRACT(EPOCH FROM (now() - queue_enter_time))::INT
          WHERE end_time IS NULL
            AND agent_answer_time IS NULL
-           AND queue_enter_time < now() - interval '30 minutes'`
+           AND queue_enter_time < now() - interval '30 minutes'
+         RETURNING call_uuid`
       );
+      // Keep agent_history consistent with the abandonment the reaper just wrote.
+      // All these rows have agent_answer_time IS NULL (per the WHERE); the helper
+      // is idempotent and only touches un-answered, not-yet-missed offering rows.
+      for (const r of reaped) {
+        await finaliseAgentHistoryMissed(r.call_uuid);
+      }
     }
   } catch (err) {
     console.error('[esl] reaperCycle:', err.message);

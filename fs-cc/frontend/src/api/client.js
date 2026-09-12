@@ -79,8 +79,9 @@ export const Calls = {
 
 // ---- Stats / Reports ----
 export const Stats = {
-  dashboard: () => api.get('/stats/dashboard').then(r => r.data),
-  queues:    () => api.get('/stats/queues').then(r => r.data),
+  dashboard:    () => api.get('/stats/dashboard').then(r => r.data),
+  queues:       () => api.get('/stats/queues').then(r => r.data),
+  businessDate: () => api.get('/stats/business-date').then(r => r.data),
 };
 
 export const Reports = {
@@ -100,4 +101,16 @@ export const Reports = {
   agentActivity:       (params)          => api.get('/reports/agent-activity',                   { params }).then(r => r.data),
   agentActivityDetail: (agentId, params) => api.get(`/reports/agent-activity/${agentId}`,       { params }).then(r => r.data),
   agentStateEvents:    (agentId, params) => api.get(`/reports/agent-state-events/${agentId}`,   { params }).then(r => r.data),
+
+  // ── Phase 4/5: supervisor break + call history (paginated) ─────────────────
+  breakHistory:        (params)          => api.get('/reports/break-history', { params }).then(r => r.data),
+  callHistory:         (params)          => api.get('/reports/call-history',  { params }).then(r => r.data),
+};
+
+// ---- Break-code administration (requires manage_break_codes; admin implicit) ----
+export const BreakCodes = {
+  list:      (params)      => api.get('/break-codes', { params }).then(r => r.data),
+  create:    (payload)     => api.post('/break-codes', payload).then(r => r.data),
+  update:    (id, payload) => api.put(`/break-codes/${id}`, payload).then(r => r.data),
+  setStatus: (id, active)  => api.patch(`/break-codes/${id}/status`, { active }).then(r => r.data),
 };

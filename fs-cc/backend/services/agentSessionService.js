@@ -38,7 +38,7 @@ async function getOpenSession(client, agentId) {
 
 async function getOpenEvent(client, agentId) {
   const { rows } = await client.query(
-    `SELECT id, status, started_at FROM agent_state_events
+    `SELECT id, status, started_at, break_code FROM agent_state_events
      WHERE agent_id = $1 AND ended_at IS NULL
      LIMIT 1`,
     [agentId]
@@ -79,16 +79,23 @@ async function closeSession(client, sessionId, reason) {
   );
 }
 
-async function openEvent(client, agentId, sessionId, status, source) {
+async function openEvent(client, agentId, sessionId, status, source, breakInfo = null) {
   // ON CONFLICT handles the same dual-trigger race as openSession.
   // idx_ase_one_open enforces at most one open event per agent;
   // DO NOTHING lets the first writer win rather than throwing.
+  //
+  // break_code / break_name are snapshotted here (only meaningful when
+  // status === 'On Break' and the caller supplied a resolved break code).
+  // The snapshot is intentionally frozen: historical rows keep the name that
+  // was configured at break time, even if the code is later renamed/disabled.
+  const breakCode = status === 'On Break' ? (breakInfo?.break_code ?? null) : null;
+  const breakName = status === 'On Break' ? (breakInfo?.break_name ?? null) : null;
   await client.query(
     `INSERT INTO agent_state_events
-       (agent_id, session_id, status, started_at, source)
-     VALUES ($1, $2, $3, now(), $4)
+       (agent_id, session_id, status, started_at, source, break_code, break_name)
+     VALUES ($1, $2, $3, now(), $4, $5, $6)
      ON CONFLICT (agent_id) WHERE ended_at IS NULL DO NOTHING`,
-    [agentId, sessionId, status, source]
+    [agentId, sessionId, status, source, breakCode, breakName]
   );
 }
 
@@ -110,8 +117,12 @@ async function closeEvent(client, eventId) {
  * @param {string} agentId   - FreeSWITCH agent name (e.g. 'alice@domain')
  * @param {string} newStatus - 'Available' | 'On Break' | 'Logged Out'
  * @param {string} source    - 'fs_event' | 'agent_self' | 'manual'
+ * @param {{break_code: string, break_name: string}|null} [breakInfo]
+ *        Optional resolved break code + snapshot name. Only meaningful when
+ *        newStatus === 'On Break'. Omitted by the FreeSWITCH / reconciliation
+ *        paths (which have no break reason) — those keep the existing behavior.
  */
-export async function handleStatusTransition(agentId, newStatus, source) {
+export async function handleStatusTransition(agentId, newStatus, source, breakInfo = null) {
   const client = await pool.connect();
   try {
     const openSession_ = await getOpenSession(client, agentId);
@@ -129,8 +140,22 @@ export async function handleStatusTransition(agentId, newStatus, source) {
 
     // newStatus is 'Available' or 'On Break'
 
-    // Dedup: same status already open — discard regardless of source
-    if (openEvent_ && openEvent_.status === newStatus) return;
+    // Dedup: same status already open.
+    // Special case: an explicit NEW break code that differs from the currently
+    // open break segment closes the old segment and opens a fresh one, so each
+    // break reason is a distinct, correctly-timed history row. When no explicit
+    // break code is supplied (FS/reconciliation path), preserve the original
+    // no-op dedup so a codeless FS event never wipes an existing snapshot.
+    if (openEvent_ && openEvent_.status === newStatus) {
+      const switchingReason =
+        newStatus === 'On Break' &&
+        breakInfo?.break_code &&
+        breakInfo.break_code !== openEvent_.break_code;
+      if (!switchingReason) return;
+      await closeEvent(client, openEvent_.id);
+      await openEvent(client, agentId, openSession_.id, newStatus, source, breakInfo);
+      return;
+    }
 
     // Close the current open event (different status)
     if (openEvent_) {
@@ -146,7 +171,7 @@ export async function handleStatusTransition(agentId, newStatus, source) {
     }
 
     // Open new state event
-    await openEvent(client, agentId, sessionId, newStatus, source);
+    await openEvent(client, agentId, sessionId, newStatus, source, breakInfo);
 
   } finally {
     client.release();
