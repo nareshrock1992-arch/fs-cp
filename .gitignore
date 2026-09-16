@@ -47,3 +47,7 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Release / audit artifacts (generated build output — never commit)
+release/
+fs-cp-final-audit.html
