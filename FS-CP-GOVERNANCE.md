@@ -176,6 +176,7 @@ When syncing changes from dev repos into fs-cp:
 
 - **Never commit** `backend/.env` or any `.env` file containing real credentials.
 - The `.env` in `fs-cp/fs-cc/backend/` is a **known security debt** — the dev repo committed it. Do NOT propagate it to fs-cp. Verify it is in `.gitignore`.
+- The dev **fs-enrs** repo likewise committed `backend/.env` **and** `frontend/.env` (both tracked in git history) — same known security debt. Do NOT propagate them to fs-cp; verify each is in `.gitignore`. Full remediation (untrack via `git rm --cached` + history purge + credential rotation) is registered in `fs-enrs/GOVERNANCE.md` → Known Security Debt.
 - `INTERNAL_API_KEY`, database passwords, JWT secrets — all must come from environment variables at runtime, never baked into committed files.
 - The nginx SSL certs in `ssl/` are mount-points only; actual cert files are excluded from git.
 
