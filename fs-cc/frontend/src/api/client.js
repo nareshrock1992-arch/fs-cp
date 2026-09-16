@@ -82,6 +82,7 @@ export const Stats = {
   dashboard:    () => api.get('/stats/dashboard').then(r => r.data),
   queues:       () => api.get('/stats/queues').then(r => r.data),
   businessDate: () => api.get('/stats/business-date').then(r => r.data),
+  liveAgents:   () => api.get('/stats/live-agents').then(r => r.data),
 };
 
 export const Reports = {

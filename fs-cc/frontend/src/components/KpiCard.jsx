@@ -57,7 +57,8 @@ export default function KpiCard({ label, value, suffix, tone = 'default', icon: 
 
       <div className="min-w-0 flex-1">
         <p className="text-[10px] uppercase tracking-widest font-semibold
-                      text-gray-400 dark:text-ink-faint mb-0.5 truncate">
+                      text-gray-400 dark:text-ink-faint mb-0.5 leading-snug
+                      break-words">
           {label}
         </p>
         <p className={`font-mono tnum text-2xl font-bold leading-none ${t.value}`}>

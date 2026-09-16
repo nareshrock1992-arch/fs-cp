@@ -1,13 +1,14 @@
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard, PhoneCall, Users, Layers,
-  Activity, BarChart3, Radio, ShieldCheck, Coffee, History,
+  Activity, BarChart3, Radio, ShieldCheck, Coffee, History, Headphones,
 } from 'lucide-react';
 import { useAuth } from '../../hooks/useAuth.js';
 
 const BASE_NAV = [
   { to: '/',            label: 'Dashboard',   icon: LayoutDashboard, end: true },
   { to: '/live-calls',  label: 'Live Calls',  icon: PhoneCall },
+  { to: '/live-agents', label: 'Live Agents', icon: Headphones },
   { to: '/queue-stats', label: 'Queue Stats', icon: Activity },
   { to: '/agents',      label: 'Agents',      icon: Users },
   { to: '/queues',      label: 'Queues',      icon: Layers },

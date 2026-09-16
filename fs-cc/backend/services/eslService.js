@@ -434,7 +434,7 @@ async function closeGhostCallsEnhanced(minAgeSeconds = 10) {
        disposition  = CASE WHEN agent_answer_time IS NULL AND disposition = 'waiting'
                            THEN 'abandoned' ELSE disposition END,
        wait_seconds = CASE WHEN queue_enter_time IS NOT NULL AND wait_seconds IS NULL
-                           THEN EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT
+                           THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT, 0)
                            ELSE wait_seconds END,
        talk_seconds = CASE WHEN agent_answer_time IS NOT NULL AND talk_seconds IS NULL
                            THEN EXTRACT(EPOCH FROM (now() - agent_answer_time))::INT
@@ -530,7 +530,15 @@ async function syncActiveCalls() {
       const joinedEpoch  = parseInt(m.joined_epoch)  || 0;
       const bridgeEpoch  = parseInt(m.bridge_epoch)  || 0;
       const queueEnterTs = joinedEpoch ? new Date(joinedEpoch * 1000).toISOString() : null;
-      const answerTs     = bridgeEpoch ? new Date(bridgeEpoch  * 1000).toISOString() : null;
+      // Only trust the member-list bridge_epoch as an answer time when it is
+      // plausible: present AND not earlier than the join (queue-entry) epoch this
+      // same sync uses for queue_enter_time. A stale/reused bridge_epoch that
+      // predates queue entry is REJECTED (left null) rather than persisted as an
+      // impossible answer time — the root cause of negative wait_seconds. The
+      // authoritative answer time is written by the real bridge-agent-start ESL
+      // event; this reconciliation only backfills gaps.
+      const answerValid  = bridgeEpoch && joinedEpoch && bridgeEpoch >= joinedEpoch;
+      const answerTs     = answerValid ? new Date(bridgeEpoch * 1000).toISOString() : null;
       const agentId      = m.serving_agent || null;
 
       try {
@@ -542,8 +550,11 @@ async function syncActiveCalls() {
            ON CONFLICT (call_uuid) DO UPDATE SET
              vdn               = COALESCE($4, calls.vdn),
              agent_id          = COALESCE($6, calls.agent_id),
-             agent_answer_time = COALESCE($8, calls.agent_answer_time),
-             disposition       = $9`,
+             -- Backfill answer time ONLY when currently NULL; never overwrite the
+             -- authoritative value set by bridge-agent-start with sync data.
+             agent_answer_time = COALESCE(calls.agent_answer_time, $8),
+             -- Never downgrade an already-answered call back to 'waiting'.
+             disposition       = CASE WHEN calls.disposition = 'answered' THEN 'answered' ELSE $9 END`,
           [ccUuid, (m.cid_number || '').slice(0, 64), '', chanUuid, queueName, agentId,
            queueEnterTs, answerTs, answerTs ? 'answered' : 'waiting']
         );
@@ -917,7 +928,7 @@ async function handleCallcenterEvent(evt) {
           `UPDATE calls SET
              end_time     = COALESCE(end_time, now()),
              wait_seconds = CASE WHEN queue_enter_time IS NOT NULL
-               THEN EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT
+               THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT, 0)
                ELSE wait_seconds END,
              talk_seconds = CASE WHEN agent_answer_time IS NOT NULL
                THEN EXTRACT(EPOCH FROM (now() - agent_answer_time))::INT
@@ -1036,7 +1047,7 @@ async function handleChannelHangup(evt) {
          abandoned    = CASE WHEN agent_answer_time IS NULL AND NOT abandoned THEN true ELSE abandoned END,
          disposition  = CASE WHEN agent_answer_time IS NULL AND disposition='waiting' THEN 'abandoned' ELSE disposition END,
          wait_seconds = CASE WHEN queue_enter_time IS NOT NULL AND wait_seconds IS NULL
-           THEN EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT
+           THEN GREATEST(EXTRACT(EPOCH FROM (COALESCE(agent_answer_time, now()) - queue_enter_time))::INT, 0)
            ELSE wait_seconds END,
          talk_seconds = CASE WHEN agent_answer_time IS NOT NULL AND talk_seconds IS NULL
            THEN EXTRACT(EPOCH FROM (now() - agent_answer_time))::INT

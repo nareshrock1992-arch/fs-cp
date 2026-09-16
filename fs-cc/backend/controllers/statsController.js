@@ -24,7 +24,7 @@ export async function getDashboardStats(req, res) {
          COUNT(*)::INT AS total,
          COUNT(*) FILTER (WHERE disposition = 'answered')::INT AS answered,
          COUNT(*) FILTER (WHERE abandoned = true)::INT AS abandoned,
-         COALESCE(AVG(wait_seconds) FILTER (WHERE wait_seconds IS NOT NULL), 0)::INT AS avg_wait_seconds,
+         COALESCE(AVG(wait_seconds) FILTER (WHERE wait_seconds IS NOT NULL AND wait_seconds >= 0), 0)::INT AS avg_wait_seconds,
          COALESCE(AVG(talk_seconds) FILTER (WHERE talk_seconds IS NOT NULL), 0)::INT AS avg_talk_seconds
        FROM calls WHERE start_time >= $1 AND start_time < $2`,
       day
@@ -190,6 +190,7 @@ export async function getQueueStats(req, res) {
 
         COALESCE(AVG(c.wait_seconds) FILTER (
           WHERE (c.start_time >= $1 AND c.start_time < $2) AND c.disposition = 'answered'
+            AND c.wait_seconds >= 0
         ), 0)::INT AS avg_wait_today,
 
         -- SLA %: answered-within-threshold / (answered + abandoned)
@@ -231,4 +232,131 @@ export async function getQueueStats(req, res) {
   `, [fromUTC.toISOString(), toUTC.toISOString()]);
 
   res.json(rows);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GET /api/stats/live-agents — supervisor "Live Agents" operational board.
+//
+// Returns ONE object per active agent in a SINGLE set-based query (all correlated
+// sub-lookups are LATERAL, so there is no N+1 and no GROUP BY fan-out). Nothing
+// here changes agent state — it is a read-only derived view over existing tables
+// (agents, agent_state_events, agent_state_log, agent_sessions, calls, agent_tiers).
+//
+// operational_state is derived from the AUTHORITATIVE FreeSWITCH callcenter fields
+// agents.status + agents.state (kept fresh by eslService). Mapping:
+//   Logged Out / no open session      → Offline
+//   On Break                          → On Break
+//   Available + Receiving             → Ringing
+//   Available + In a queue call       → On Call
+//   Available + (Waiting/Idle/other)  → Idle
+// Wrap-up and Held are NOT modelled in agents.state, so they are never fabricated.
+//
+// Timestamps (the client ticks locally from these — no per-second requests):
+//   status_since — start of the current Available/On-Break segment (agent_state_events)
+//   state_since  — last transition INTO the current fine state (agent_state_log);
+//                  used as the TRUE idle anchor so idle time is measured from when
+//                  the agent last became Waiting, NOT from when Available began
+//                  (status_since would be wrong if calls were handled since).
+//   login_at     — open agent_sessions row (login duration)
+//   idle_since   — server-chosen idle anchor (state_since || status_since), only
+//                  when operational_state = Idle.
+//
+// Data-consistency precedence rule (async ESL events can briefly disagree):
+//   agents.status/state is authoritative for operational_state (the label). The
+//   open-call row is surfaced as current_call regardless (never hidden), so a
+//   supervisor still sees a lingering call during the brief settling window; the
+//   STATE wins for the label. This is intentional and covered by tests.
+export async function getLiveAgents(_req, res) {
+  const { rows } = await query(`
+    SELECT
+      a.id,
+      a.agent_id,
+      a.full_name,
+      a.avaya_extension,
+      a.status,
+      a.state,
+      a.break_code,
+      bc.name                    AS break_name,
+      a.break_started_at,
+      ase.started_at             AS status_since,
+      sl.changed_at              AS state_since,
+      sess.login_at,
+      CASE
+        WHEN a.status = 'Logged Out' OR sess.login_at IS NULL      THEN 'Offline'
+        WHEN a.status = 'On Break'                                 THEN 'On Break'
+        WHEN a.status = 'Available' AND a.state = 'Receiving'      THEN 'Ringing'
+        WHEN a.status = 'Available' AND a.state = 'In a queue call' THEN 'On Call'
+        WHEN a.status = 'Available'                                THEN 'Idle'
+        ELSE 'Offline'
+      END                        AS operational_state,
+      qs.queues,
+      CASE WHEN oc.call_uuid IS NULL THEN NULL ELSE json_build_object(
+        'call_uuid',         oc.call_uuid,
+        'ani',               oc.ani,
+        'dnis',              oc.dnis,
+        'queue_name',        oc.queue_name,
+        'agent_answer_time', oc.agent_answer_time,
+        'queue_enter_time',  oc.queue_enter_time,
+        'start_time',        oc.start_time
+      ) END                      AS current_call
+
+    FROM agents a
+    LEFT JOIN break_codes bc ON bc.code = a.break_code
+
+    -- Open status segment (Available/On Break) — same source as GET /api/agents.
+    LEFT JOIN LATERAL (
+      SELECT started_at FROM agent_state_events
+      WHERE agent_id = a.agent_id AND ended_at IS NULL
+      LIMIT 1
+    ) ase ON true
+
+    -- Last transition INTO the agent's CURRENT fine state (true idle/state anchor).
+    LEFT JOIN LATERAL (
+      SELECT changed_at FROM agent_state_log
+      WHERE agent_id = a.agent_id AND state IS NOT NULL AND state = a.state
+      ORDER BY changed_at DESC
+      LIMIT 1
+    ) sl ON true
+
+    -- Open login session (login duration).
+    LEFT JOIN LATERAL (
+      SELECT login_at FROM agent_sessions
+      WHERE agent_id = a.agent_id AND logout_at IS NULL
+      ORDER BY login_at DESC
+      LIMIT 1
+    ) sess ON true
+
+    -- Current open call for this agent (agent_id is a varchar on calls).
+    LEFT JOIN LATERAL (
+      SELECT call_uuid, ani, dnis, queue_name, agent_answer_time, queue_enter_time, start_time
+      FROM calls
+      WHERE agent_id = a.agent_id AND end_time IS NULL
+      ORDER BY start_time DESC
+      LIMIT 1
+    ) oc ON true
+
+    -- Queue membership (aggregated in LATERAL → no GROUP BY needed).
+    LEFT JOIN LATERAL (
+      SELECT COALESCE(
+        json_agg(json_build_object('queue', q.name, 'display_name', q.display_name,
+                                   'level', t.level, 'position', t.position)
+                 ORDER BY t.level, t.position),
+        '[]'
+      ) AS queues
+      FROM agent_tiers t
+      JOIN queues q ON q.id = t.queue_id
+      WHERE t.agent_id = a.id
+    ) qs ON true
+
+    WHERE a.active = true
+    ORDER BY a.full_name ASC
+  `);
+
+  const agents = rows.map(r => ({
+    ...r,
+    idle_since: r.operational_state === 'Idle' ? (r.state_since || r.status_since) : null,
+  }));
+
+  // server_time lets the client align its local tick to the server clock (UTC).
+  res.json({ eslConnected: isConnected(), server_time: new Date().toISOString(), agents });
 }

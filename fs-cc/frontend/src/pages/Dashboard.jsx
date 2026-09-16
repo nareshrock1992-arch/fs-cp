@@ -211,26 +211,30 @@ function QueuePerformanceSection({ distribution }) {
       ) : (
         /* Side-by-side: chart left, table right */
         <div className="flex gap-4">
-          {/* Chart */}
-          <div className="relative" style={{ flex: '0 0 42%', minWidth: 0 }}>
-            <ResponsiveContainer width="100%" height={130}>
-              <BarChart data={chartData}
-                margin={{ top: 2, right: 2, left: -28, bottom: 0 }}
-                barCategoryGap="30%">
-                <CartesianGrid strokeDasharray="3 3"
-                  stroke="rgba(139,153,184,0.10)" vertical={false} />
-                <XAxis dataKey="name"
-                  tick={{ fontSize: 9, fill: '#8B99B8', fontFamily: 'Inter, sans-serif' }}
-                  axisLine={false} tickLine={false} />
-                <YAxis
-                  tick={{ fontSize: 9, fill: '#8B99B8', fontFamily: 'Inter, sans-serif' }}
-                  axisLine={false} tickLine={false} allowDecimals={false} />
-                <Tooltip content={<BarTooltip />} cursor={{ fill: 'rgba(139,153,184,0.06)' }} />
-                <Bar dataKey="Offered"   name="Offered"   fill="#3B82F6" radius={[2,2,0,0]} />
-                <Bar dataKey="Answered"  name="Answered"  fill="#27C98A" radius={[2,2,0,0]} />
-                <Bar dataKey="Abandoned" name="Abandoned" fill="#EF4444" radius={[2,2,0,0]} />
-              </BarChart>
-            </ResponsiveContainer>
+          {/* Chart — horizontally scrolls internally once queue count would
+              otherwise compress bars/labels into unreadable slivers; never
+              causes the page itself to overflow. */}
+          <div className="relative overflow-x-auto" style={{ flex: '0 0 42%', minWidth: 0 }}>
+            <div style={{ minWidth: Math.max(100, chartData.length * 11) + '%', height: 130 }}>
+              <ResponsiveContainer width="100%" height={130}>
+                <BarChart data={chartData}
+                  margin={{ top: 2, right: 2, left: -28, bottom: 0 }}
+                  barCategoryGap="30%">
+                  <CartesianGrid strokeDasharray="3 3"
+                    stroke="rgba(139,153,184,0.10)" vertical={false} />
+                  <XAxis dataKey="name"
+                    tick={{ fontSize: 9, fill: '#8B99B8', fontFamily: 'Inter, sans-serif' }}
+                    axisLine={false} tickLine={false} interval={0} />
+                  <YAxis
+                    tick={{ fontSize: 9, fill: '#8B99B8', fontFamily: 'Inter, sans-serif' }}
+                    axisLine={false} tickLine={false} allowDecimals={false} />
+                  <Tooltip content={<BarTooltip />} cursor={{ fill: 'rgba(139,153,184,0.06)' }} />
+                  <Bar dataKey="Offered"   name="Offered"   fill="#3B82F6" radius={[2,2,0,0]} />
+                  <Bar dataKey="Answered"  name="Answered"  fill="#27C98A" radius={[2,2,0,0]} />
+                  <Bar dataKey="Abandoned" name="Abandoned" fill="#EF4444" radius={[2,2,0,0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
             {totalOffered === 0 && (
               <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
                 <span className="text-[10px] text-gray-400 dark:text-ink-faint bg-white/80
@@ -241,10 +245,12 @@ function QueuePerformanceSection({ distribution }) {
             )}
           </div>
 
-          {/* Table */}
-          <div className="flex-1 min-w-0 overflow-x-auto">
+          {/* Table — vertical scroll caps the panel height once the queue
+              list grows (10+ queues) instead of stretching the whole page;
+              header stays pinned so columns remain readable while scrolling. */}
+          <div className="flex-1 min-w-0 overflow-x-auto overflow-y-auto max-h-64">
             <table className="w-full text-xs" style={{ minWidth: 240 }}>
-              <thead>
+              <thead className="sticky top-0 bg-white dark:bg-panel-surface z-10">
                 <tr className="border-b border-gray-100 dark:border-panel-border">
                   {[
                     ['Queue',    'text-left',  ''],
@@ -407,7 +413,7 @@ function LiveQueueSnapshot({ queueStats }) {
           </div>
         </div>
       ) : (
-        <div className="space-y-1.5">
+        <div className="space-y-1.5 max-h-80 overflow-y-auto pr-0.5">
           {queueStats.map((q, i) => {
             const waiting = q.waiting || 0;
             const avail   = q.available_agents || 0;
@@ -476,7 +482,7 @@ function AgentRoster({ agents, tick }) {
           <p className="text-xs text-gray-500 dark:text-ink-dim">No agents configured</p>
         </div>
       ) : (
-        <div className="space-y-0.5">
+        <div className="space-y-0.5 max-h-80 overflow-y-auto pr-0.5">
           {sorted.map((a) => {
             const initials = (a.full_name || '??')
               .split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();

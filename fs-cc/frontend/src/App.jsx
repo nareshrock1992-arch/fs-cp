@@ -8,6 +8,7 @@ import Agents from './pages/Agents.jsx';
 import Queues from './pages/Queues.jsx';
 import LiveCalls from './pages/LiveCalls.jsx';
 import QueueStats from './pages/QueueStats.jsx';
+import LiveAgents from './pages/LiveAgents.jsx';
 import Reports from './pages/Reports.jsx';
 import UserManagement from './pages/UserManagement.jsx';
 import BreakCodes from './pages/BreakCodes.jsx';
@@ -60,6 +61,7 @@ export default function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="live-calls" element={<LiveCalls />} />
+        <Route path="live-agents" element={<LiveAgents />} />
         <Route path="agents" element={<Agents />} />
         <Route path="queues" element={<Queues />} />
         <Route path="queue-stats" element={<QueueStats />} />
